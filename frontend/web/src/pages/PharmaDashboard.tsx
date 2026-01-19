@@ -18,15 +18,10 @@ interface Appointment {
   status: AppointmentStatus;
 }
 
-const mockNotifications = [
-  { id: "1", message: "Your appointment with Dr. Rahul Sharma is confirmed", time: "2 hours ago", unread: true },
-  { id: "2", message: "Dr. Priya Patel rescheduled to 2:30 PM", time: "5 hours ago", unread: true },
-  { id: "3", message: "Appointment completed with Dr. Amit Kumar", time: "2 days ago", unread: false },
-];
-
 const PharmaDashboard = () => {
   const [activeTab, setActiveTab] = useState<"appointments" | "notifications">("appointments");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -54,6 +49,21 @@ const PharmaDashboard = () => {
         }));
 
         setAppointments(transformedAppointments);
+        
+        // For notifications, we can derive from appointments (confirmed, cancelled, etc.)
+        // In a real app, you'd have a separate notifications endpoint
+        const appointmentNotifications = transformedAppointments
+          .filter(apt => apt.status === "confirmed" || apt.status === "cancelled")
+          .map(apt => ({
+            id: apt.id,
+            message: apt.status === "confirmed" 
+              ? `Your appointment with ${apt.doctorName} is confirmed`
+              : `Appointment with ${apt.doctorName} has been ${apt.status}`,
+            time: apt.date,
+            unread: true,
+            type: apt.status
+          }));
+        setNotifications(appointmentNotifications);
       } catch (error) {
         console.error("Error fetching appointments:", error);
         toast({
@@ -97,7 +107,7 @@ const PharmaDashboard = () => {
 
   const upcomingCount = appointments.filter((a) => a.status === "pending" || a.status === "confirmed").length;
   const completedCount = appointments.filter((a) => a.status === "completed").length;
-  const unreadNotifications = mockNotifications.filter((n) => n.unread).length;
+  const unreadNotifications = notifications.filter((n) => n.unread).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -279,26 +289,33 @@ const PharmaDashboard = () => {
           </div>
         ) : (
           <div className="bg-card rounded-2xl border border-border p-6">
-            <div className="space-y-4">
-              {mockNotifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  className={`p-4 rounded-xl border transition-all ${
-                    notification.unread
-                      ? "border-primary/30 bg-primary/5"
-                      : "border-border bg-card"
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className={`w-2 h-2 rounded-full mt-2 ${notification.unread ? "bg-primary" : "bg-muted"}`} />
-                    <div className="flex-1">
-                      <p className="text-foreground">{notification.message}</p>
-                      <p className="text-sm text-muted-foreground mt-1">{notification.time}</p>
+            {notifications.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-muted-foreground">No notifications yet</p>
+                <p className="text-sm text-muted-foreground mt-2">You'll see notifications about your appointments here</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {notifications.map((notification) => (
+                  <div
+                    key={notification.id}
+                    className={`p-4 rounded-xl border transition-all ${
+                      notification.unread
+                        ? "border-primary/30 bg-primary/5"
+                        : "border-border bg-card"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`w-2 h-2 rounded-full mt-2 ${notification.unread ? "bg-primary" : "bg-muted"}`} />
+                      <div className="flex-1">
+                        <p className="text-foreground">{notification.message}</p>
+                        <p className="text-sm text-muted-foreground mt-1">{notification.time}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -1,37 +1,48 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:fluttertoast/fluttertoast.dart';
-import '../utils/app_colors.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'api_service.dart';
 
 class PaymentService {
   static String get baseUrl => ApiService.baseUrl;
+  static const String _cashfreeSandboxCheckoutUrl = 'https://sandbox.cashfree.com/pg/view/sessions/checkout';
+  static const String _cashfreeProductionCheckoutUrl = 'https://payments.cashfree.com/pg/view/sessions/checkout';
   
-  /// Create a payment order for appointment/operation/hospital_registration/pharma_appointment
+  static String get cashfreeCheckoutBaseUrl {
+    const mode = String.fromEnvironment('CASHFREE_MODE', defaultValue: 'production');
+    return mode.toLowerCase() == 'sandbox'
+        ? _cashfreeSandboxCheckoutUrl
+        : _cashfreeProductionCheckoutUrl;
+  }
+  
+  /// Create a payment order for appointment/operation (authenticated users)
   static Future<Map<String, dynamic>?> createPaymentOrder({
-    required String type, // 'appointment', 'operation', 'hospital_registration', 'pharma_appointment', 'subscription'
-    required int hospitalId,
-    required String patientName,
-    required String patientMobile,
+    required int? appointmentId,
+    required int? operationId,
     required double amount,
-    Map<String, dynamic>? metadata,
+    String currency = 'INR',
+    String? authToken,
   }) async {
     try {
-      print('Creating payment order: type=$type, hospitalId=$hospitalId, amount=$amount');
+      print('Creating payment order: appointmentId=$appointmentId, operationId=$operationId, amount=$amount');
+      
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      
+      if (authToken != null) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
       
       final response = await http.post(
         Uri.parse('$baseUrl/api/payments/create-order'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: headers,
         body: jsonEncode({
-          'type': type,
-          'hospital_id': hospitalId,
-          'patient_name': patientName,
-          'patient_mobile': patientMobile,
+          'appointment_id': appointmentId,
+          'operation_id': operationId,
           'amount': amount,
-          'metadata': metadata ?? {},
+          'currency': currency,
         }),
       ).timeout(const Duration(seconds: 30));
 
@@ -40,7 +51,7 @@ class PaymentService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        print('Payment order created successfully: ${data['order_id']}');
+        print('Payment order created successfully: ${data['payment_session_id'] ?? data['order_id']}');
         return data;
       } else {
         print('Payment order creation failed: Status ${response.statusCode}, Body: ${response.body}');
@@ -57,28 +68,123 @@ class PaymentService {
     }
   }
 
-  /// Verify payment after completion
-  static Future<bool> verifyPayment({
-    required String orderId,
-    required String paymentId,
-    required String signature,
+  /// Create a payment order for guest bookings (no auth required)
+  static Future<Map<String, dynamic>?> createGuestPaymentOrder({
+    required int? appointmentId,
+    required int? operationId,
+    required double amount,
+    String currency = 'INR',
   }) async {
     try {
+      print('Creating guest payment order: appointmentId=$appointmentId, operationId=$operationId, amount=$amount');
+      
       final response = await http.post(
-        Uri.parse('$baseUrl/api/payments/verify'),
+        Uri.parse('$baseUrl/api/payments/create-order-guest'),
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: jsonEncode({
-          'order_id': orderId,
-          'payment_id': paymentId,
-          'signature': signature,
+          'appointment_id': appointmentId,
+          'operation_id': operationId,
+          'amount': amount,
+          'currency': currency,
         }),
+      ).timeout(const Duration(seconds: 30));
+
+      print('Guest payment order response status: ${response.statusCode}');
+      print('Guest payment order response body: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        print('Guest payment order created successfully: ${data['payment_session_id'] ?? data['order_id']}');
+        return data;
+      } else {
+        print('Guest payment order creation failed: Status ${response.statusCode}, Body: ${response.body}');
+        try {
+          final error = jsonDecode(response.body);
+          throw Exception(error['detail'] ?? 'Failed to create payment order');
+        } catch (e) {
+          throw Exception('Failed to create payment order: ${response.statusCode}');
+        }
+      }
+    } catch (e) {
+      print('Error creating guest payment order: $e');
+      rethrow;
+    }
+  }
+
+  /// Create a payment order for hospital registration
+  static Future<Map<String, dynamic>?> createHospitalRegistrationOrder({
+    required String planName,
+    required double amount,
+    String? customerName,
+    String? customerPhone,
+    String? customerEmail,
+    String currency = 'INR',
+  }) async {
+    try {
+      print('Creating hospital registration payment order: planName=$planName, amount=$amount');
+      
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/payments/create-order-hospital'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'hospital_registration': true,
+          'plan_name': planName,
+          'amount': amount,
+          'currency': currency,
+          'customer_name': customerName,
+          'customer_phone': customerPhone,
+          'customer_email': customerEmail,
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      print('Hospital payment order response status: ${response.statusCode}');
+      print('Hospital payment order response body: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        print('Hospital payment order created successfully: ${data['payment_session_id'] ?? data['order_id']}');
+        return data;
+      } else {
+        print('Hospital payment order creation failed: Status ${response.statusCode}, Body: ${response.body}');
+        try {
+          final error = jsonDecode(response.body);
+          throw Exception(error['detail'] ?? 'Failed to create payment order');
+        } catch (e) {
+          throw Exception('Failed to create payment order: ${response.statusCode}');
+        }
+      }
+    } catch (e) {
+      print('Error creating hospital payment order: $e');
+      rethrow;
+    }
+  }
+
+  /// Verify payment after completion (uses payment_id, not order_id)
+  static Future<bool> verifyPayment(int paymentId, {String? authToken}) async {
+    try {
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      
+      if (authToken != null) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+      
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/payments/verify/$paymentId'),
+        headers: headers,
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        return data['verified'] == true;
+        return data['verified'] == true || data['status'] == 'COMPLETED';
       }
       return false;
     } catch (e) {
@@ -87,14 +193,21 @@ class PaymentService {
     }
   }
 
-  /// Get payment status
-  static Future<Map<String, dynamic>?> getPaymentStatus(String orderId) async {
+  /// Get payment status (uses payment_id, not order_id)
+  static Future<Map<String, dynamic>?> getPaymentStatus(int paymentId, {String? authToken}) async {
     try {
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      
+      if (authToken != null) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+      
       final response = await http.get(
-        Uri.parse('$baseUrl/api/payments/status/$orderId'),
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        Uri.parse('$baseUrl/api/payments/$paymentId/status'),
+        headers: headers,
       );
 
       if (response.statusCode == 200) {
@@ -104,6 +217,42 @@ class PaymentService {
     } catch (e) {
       print('Error getting payment status: $e');
       return null;
+    }
+  }
+
+  /// Get payment details by payment_id
+  static Future<Map<String, dynamic>?> getPayment(int paymentId, {String? authToken}) async {
+    try {
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      
+      if (authToken != null) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+      
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/payments/$paymentId'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+      return null;
+    } catch (e) {
+      print('Error getting payment: $e');
+      return null;
+    }
+  }
+
+  /// Open Cashfree Checkout in external browser
+  static Future<void> openCashfreeCheckout(String paymentSessionId) async {
+    final checkoutUrl = '$cashfreeCheckoutBaseUrl?payment_session_id=$paymentSessionId';
+    final uri = Uri.parse(checkoutUrl);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      throw Exception('Unable to open payment gateway');
     }
   }
 

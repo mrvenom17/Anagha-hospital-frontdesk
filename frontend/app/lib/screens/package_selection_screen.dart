@@ -20,7 +20,6 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
   String? _selectedPackage;
   String? _selectedBillingPeriod;
   bool _isLoading = false;
-  String? _paymentOrderId;
 
   final Map<String, Map<String, dynamic>> _packages = {
     'basic': {
@@ -72,28 +71,22 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
           : package['yearly_price'] as double;
 
       // Create payment order
-      final paymentOrderResponse = await PaymentService.createPaymentOrder(
-        type: 'hospital_registration',
-        hospitalId: 0, // Will be set after registration
-        patientName: widget.hospitalData['name'] ?? '',
-        patientMobile: widget.hospitalData['mobile'] ?? '',
+      final paymentOrderResponse = await PaymentService.createHospitalRegistrationOrder(
+        planName: package['name'] as String,
         amount: amount,
-        metadata: {
-          'hospital_name': widget.hospitalData['name'] ?? '',
-          'hospital_email': widget.hospitalData['email'] ?? '',
-          'package_type': _selectedPackage!,
-          'billing_period': _selectedBillingPeriod!,
-        },
+        customerName: widget.hospitalData['name'] ?? '',
+        customerPhone: widget.hospitalData['mobile'] ?? '',
+        customerEmail: widget.hospitalData['email'] ?? '',
       );
 
-      if (paymentOrderResponse == null || paymentOrderResponse['order_id'] == null) {
+      if (paymentOrderResponse == null || paymentOrderResponse['payment_session_id'] == null) {
         throw Exception('Failed to create payment order');
       }
 
-      final orderId = paymentOrderResponse['order_id'] as String;
+      final paymentId = paymentOrderResponse['payment_id'] as int?;
+      final paymentSessionId = paymentOrderResponse['payment_session_id'] as String?;
 
       setState(() {
-        _paymentOrderId = orderId;
         _isLoading = false;
       });
 
@@ -103,7 +96,8 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => HospitalRegisterScreen(
-              initialPaymentOrderId: orderId,
+              initialPaymentId: paymentId,
+              initialPaymentSessionId: paymentSessionId,
               selectedPackage: _selectedPackage!,
               selectedBillingPeriod: _selectedBillingPeriod!,
             ),

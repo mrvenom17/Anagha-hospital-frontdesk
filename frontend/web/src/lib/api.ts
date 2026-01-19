@@ -1,13 +1,73 @@
 /**
  * API Service Layer
- * Handles all communication with the backend FastAPI server
+ * Handles all communication with the backend FastAPI server using axios
  */
 
-// API Base URL - use environment variable or default to current host
-const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+
+// API Base URL - use environment variable for production API domain
+// Set VITE_API_BASE_URL in .env file: VITE_API_BASE_URL=https://api.anaghahealthconnect.com
+// Default to localhost:3000 for development
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+
+// Create axios instance
+const apiClient: AxiosInstance = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  timeout: 30000, // 30 seconds timeout
+});
+
+// Request interceptor - Add auth token from localStorage
+apiClient.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    const token = localStorage.getItem('authToken');
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error: AxiosError) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor - Handle auth errors globally
+apiClient.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  (error: AxiosError) => {
+    // Handle 401 Unauthorized - token expired or invalid
+    if (error.response?.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      
+      // Redirect to login if not already there
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+    
+    // Transform error to consistent format
+    if (error.response) {
+      const errorData = error.response.data as any;
+      const errorMessage = errorData?.detail || errorData?.message || `HTTP error! status: ${error.response.status}`;
+      return Promise.reject(new Error(errorMessage));
+    }
+    
+    // Handle network errors
+    if (error.message.includes('ECONNREFUSED') || error.message.includes('Network Error')) {
+      return Promise.reject(new Error('Cannot connect to server. Please ensure the backend server is running.'));
+    }
+    
+    return Promise.reject(error);
+  }
+);
 
 // Helper function to get auth token from localStorage
-const getAuthToken = (): string | null => {
+export const getAuthToken = (): string | null => {
   return localStorage.getItem('authToken');
 };
 
@@ -19,9 +79,10 @@ export const setAuthToken = (token: string): void => {
 // Helper function to remove auth token
 export const removeAuthToken = (): void => {
   localStorage.removeItem('authToken');
+  localStorage.removeItem('user');
 };
 
-// Generic API request function
+// Generic API request function (for backward compatibility)
 export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -77,10 +138,11 @@ export async function apiRequest<T>(
 export const authAPI = {
   // Login with mobile and password
   login: async (mobile: string, password: string) => {
-    return apiRequest<{ access_token: string; token_type: string; user: any }>('/api/users/login', {
-      method: 'POST',
-      body: JSON.stringify({ mobile, password }),
+    const response = await apiClient.post<{ access_token: string; token_type: string; user: any }>('/api/users/login', {
+      mobile,
+      password,
     });
+    return response.data;
   },
 
   // Register new user
@@ -93,16 +155,20 @@ export const authAPI = {
     city?: string;
     state?: string;
     specialty?: string;
+    hospital_id?: number;
+    degree?: string;
+    institute_name?: string;
   }) => {
-    return apiRequest<{ access_token: string; token_type: string; user: any; message?: string }>('/api/users/register', {
-      method: 'POST',
-      body: JSON.stringify(userData),
-    });
+    // Use different endpoint for doctor registration
+    const endpoint = userData.role === 'doctor' ? '/api/users/register-doctor' : '/api/users/register';
+    const response = await apiClient.post<{ access_token: string; token_type: string; user: any; message?: string }>(endpoint, userData);
+    return response.data;
   },
 
   // Get current user info
   getCurrentUser: async () => {
-    return apiRequest<any>('/api/users/me');
+    const response = await apiClient.get<any>('/api/users/me');
+    return response.data;
   },
 };
 
@@ -110,86 +176,147 @@ export const authAPI = {
 export const hospitalsAPI = {
   // Get all approved hospitals
   getApproved: async () => {
-    return apiRequest<any[]>('/api/hospitals/approved');
+    const response = await apiClient.get<any[]>('/api/hospitals/approved');
+    return response.data;
   },
 
   // Register new hospital
   register: async (hospitalData: any) => {
-    return apiRequest<any>('/api/hospitals/register', {
-      method: 'POST',
-      body: JSON.stringify(hospitalData),
-    });
+    const response = await apiClient.post<any>('/api/hospitals/register', hospitalData);
+    return response.data;
   },
 
   // Get hospital by ID
   getById: async (id: number) => {
-    return apiRequest<any>(`/api/hospitals/${id}`);
+    const response = await apiClient.get<any>(`/api/hospitals/${id}`);
+    return response.data;
   },
 };
 
 // Doctors API
 export const doctorsAPI = {
-  // Get all doctors
+  // Get all doctors (public endpoint - no auth required)
   getAll: async () => {
-    return apiRequest<any[]>('/api/users/doctors');
+    try {
+      // Try public endpoint first (for booking pages)
+      const response = await apiClient.get<any[]>('/api/users/doctors/public');
+      return response.data;
+    } catch (error) {
+      // Fallback to authenticated endpoint if public fails
+      try {
+        const response = await apiClient.get<any[]>('/api/users/doctors');
+        return response.data;
+      } catch (fallbackError) {
+        // If both fail, return empty array
+        console.error("Error fetching doctors:", fallbackError);
+        return [];
+      }
+    }
   },
 };
 
 // Appointments API
 export const appointmentsAPI = {
-  // Book appointment
+  // Book appointment (authenticated user)
   book: async (appointmentData: {
     doctor_id: number;
     date: string;
     time_slot: string;
     reason?: string;
   }) => {
-    return apiRequest<any>('/api/appointments/book', {
-      method: 'POST',
-      body: JSON.stringify(appointmentData),
-    });
+    const response = await apiClient.post<any>('/api/appointments/book', appointmentData);
+    return response.data;
+  },
+
+  // Book appointment as guest (no auth required)
+  bookGuest: async (appointmentData: {
+    patient_name: string;
+    patient_phone: string;
+    doctor_id: number;
+    date: string;
+    time_slot: string;
+    reason?: string;
+  }) => {
+    // Guest booking doesn't require auth token, so use fetch directly
+    console.log("📤 Sending guest booking request:", appointmentData);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/appointments/book-guest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(appointmentData),
+        signal: AbortSignal.timeout(30000), // 30 second timeout
+      });
+
+      console.log("📥 Response status:", response.status, response.statusText);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+          console.error("❌ Error response:", errorData);
+        } catch {
+          const text = await response.text();
+          errorData = { detail: `HTTP error! status: ${response.status}`, body: text };
+          console.error("❌ Error response (non-JSON):", text);
+        }
+        throw new Error(errorData.detail || errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log("✅ Booking successful:", result);
+      return result;
+    } catch (error: any) {
+      console.error("❌ Booking error:", error);
+      if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+        throw new Error("Request timed out. Please check your connection and try again.");
+      }
+      throw error;
+    }
   },
 
   // Get my appointments
   getMyAppointments: async () => {
-    return apiRequest<any[]>('/api/appointments/my-appointments');
+    const response = await apiClient.get<any[]>('/api/appointments/my-appointments');
+    return response.data;
   },
 
   // Get doctor appointments
   getDoctorAppointments: async () => {
-    return apiRequest<any[]>('/api/appointments/doctor-appointments');
+    const response = await apiClient.get<any[]>('/api/appointments/doctor-appointments');
+    return response.data;
   },
 
   // Get available slots
   getAvailableSlots: async (doctorId: number, date: string) => {
-    return apiRequest<{
+    const response = await apiClient.get<{
       doctor_id: number;
       doctor_name: string;
       date: string;
       available_slots: string[];
       booked_slots: string[];
     }>(`/api/appointments/available-slots?doctor_id=${doctorId}&date=${date}`);
+    return response.data;
   },
 
   // Confirm appointment
   confirm: async (appointmentId: number) => {
-    return apiRequest<any>(`/api/appointments/${appointmentId}/confirm`, {
-      method: 'PUT',
-    });
+    const response = await apiClient.put<any>(`/api/appointments/${appointmentId}/confirm`);
+    return response.data;
   },
 
   // Cancel appointment
   cancel: async (appointmentId: number) => {
-    return apiRequest<any>(`/api/appointments/${appointmentId}/cancel`, {
-      method: 'PUT',
-    });
+    const response = await apiClient.put<any>(`/api/appointments/${appointmentId}/cancel`);
+    return response.data;
   },
 
   // Mark as visited
   markVisited: async (appointmentId: number) => {
-    return apiRequest<any>(`/api/appointments/${appointmentId}/mark-visited`, {
-      method: 'PUT',
-    });
+    const response = await apiClient.put<any>(`/api/appointments/${appointmentId}/mark-visited`);
+    return response.data;
   },
 };
 
@@ -203,70 +330,126 @@ export const operationsAPI = {
     specialty: string;
     notes?: string;  // Fixed: was 'reason', matches backend schema
   }) => {
-    return apiRequest<any>('/api/operations/book', {
-      method: 'POST',
-      body: JSON.stringify(operationData),
-    });
+    const response = await apiClient.post<any>('/api/operations/book', operationData);
+    return response.data;
   },
 
   // Get my operations
   getMyOperations: async () => {
-    return apiRequest<any[]>('/api/operations/my-operations');
+    const response = await apiClient.get<any[]>('/api/operations/my-operations');
+    return response.data;
   },
 
   // Get doctor operations
   getDoctorOperations: async () => {
-    return apiRequest<any[]>('/api/operations/doctor-operations');
+    const response = await apiClient.get<any[]>('/api/operations/doctor-operations');
+    return response.data;
   },
 
   // Confirm operation
   confirm: async (operationId: number) => {
-    return apiRequest<any>(`/api/operations/${operationId}/confirm`, {
-      method: 'PUT',
-    });
+    const response = await apiClient.put<any>(`/api/operations/${operationId}/confirm`);
+    return response.data;
   },
 
   // Cancel operation
   cancel: async (operationId: number) => {
-    return apiRequest<any>(`/api/operations/${operationId}/cancel`, {
-      method: 'PUT',
-    });
+    const response = await apiClient.put<any>(`/api/operations/${operationId}/cancel`);
+    return response.data;
   },
 };
 
 // Payments API
 export const paymentsAPI = {
-  // Create payment order
-  createOrder: async (amount: number, hospitalId?: number) => {
-    return apiRequest<any>('/api/payments/create', {  // Fixed: was '/create-order'
-      method: 'POST',
-      body: JSON.stringify({ amount, hospital_id: hospitalId }),
+  // Create payment order for appointments/operations (supports both authenticated and guest)
+  createOrder: async (orderData: {
+    appointment_id?: number;
+    operation_id?: number;
+    amount: number;
+    currency?: string;
+  }, isGuest: boolean = false) => {
+    // For guest bookings, use fetch directly without auth token
+    if (isGuest) {
+      const response = await fetch(`${API_BASE_URL}/api/payments/create-order-guest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          appointment_id: orderData.appointment_id || null,
+          operation_id: orderData.operation_id || null,
+          amount: orderData.amount,
+          currency: orderData.currency || 'INR',
+        }),
+      });
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = { detail: `HTTP error! status: ${response.status}` };
+        }
+        throw new Error(errorData.detail || errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      return response.json();
+    }
+    
+    // For authenticated users, use axios with token
+    const response = await apiClient.post<any>('/api/payments/create-order', {
+      appointment_id: orderData.appointment_id || null,
+      operation_id: orderData.operation_id || null,
+      amount: orderData.amount,
+      currency: orderData.currency || 'INR',
     });
+    return response.data;
   },
 
   // Create hospital registration payment order
-  createHospitalRegistrationOrder: async (planName: string, amount: number) => {
-    return apiRequest<any>('/api/payments/create-order-hospital', {
-      method: 'POST',
-      body: JSON.stringify({
-        hospital_registration: true,
-        plan_name: planName,
-        amount: amount,
-        currency: 'INR',
-      }),
+  createHospitalRegistrationOrder: async (
+    planName: string, 
+    amount: number,
+    customerName?: string,
+    customerPhone?: string,
+    customerEmail?: string
+  ) => {
+    console.log("🔵 FRONTEND DEBUG: Creating hospital payment order", {
+      planName,
+      amount,
+      customerName,
+      customerPhone,
+      customerEmail
     });
+    const response = await apiClient.post<any>('/api/payments/create-order-hospital', {
+      hospital_registration: true,
+      plan_name: planName,
+      amount: amount,
+      currency: 'INR',
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      customer_email: customerEmail,
+    });
+    console.log("🔵 FRONTEND DEBUG: Payment order response", response.data);
+    return response.data;
   },
 
-  // Verify payment
-  verifyPayment: async (paymentId: number) => {  // Fixed: payment_id in URL path, not body
-    return apiRequest<any>(`/api/payments/verify/${paymentId}`, {
-      method: 'POST',
-    });
+  // Verify payment - ALWAYS verify via backend before confirming booking
+  verifyPayment: async (paymentId: number) => {
+    const response = await apiClient.post<any>(`/api/payments/verify/${paymentId}`);
+    return response.data;
   },
 
-  // Get payment status
+  // Get payment status (for polling/resume)
   getPaymentStatus: async (paymentId: number) => {
-    return apiRequest<any>(`/api/payments/${paymentId}/status`);
+    const response = await apiClient.get<any>(`/api/payments/${paymentId}/status`);
+    return response.data;
+  },
+
+  // Get payment details
+  getPayment: async (paymentId: number) => {
+    const response = await apiClient.get<any>(`/api/payments/${paymentId}`);
+    return response.data;
   },
 };
 
@@ -274,19 +457,22 @@ export const paymentsAPI = {
 export const adminAPI = {
   // Get pricing (admin only)
   getPricing: async () => {
-    return apiRequest<any>('/api/admin/pricing');
+    const response = await apiClient.get<any>('/api/admin/pricing');
+    return response.data;
   },
 
   // Get public pricing (for hospital registration)
   getPublicPricing: async () => {
-    return apiRequest<any>('/api/admin/pricing/public');
+    const response = await apiClient.get<any>('/api/admin/pricing/public');
+    return response.data;
   },
 
   // Update pricing
   updatePricing: async (pricingData: any) => {
-    return apiRequest<any>('/api/admin/update-pricing', {
-      method: 'POST',
-      body: JSON.stringify(pricingData),
-    });
+    const response = await apiClient.post<any>('/api/admin/update-pricing', pricingData);
+    return response.data;
   },
 };
+
+// Export axios instance for direct use if needed
+export { apiClient };

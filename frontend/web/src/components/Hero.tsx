@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Play, Shield, Clock, Users } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const Hero = () => {
+  const navigate = useNavigate();
   return (
     <section className="relative pt-24 lg:pt-32 pb-16 lg:pb-24 overflow-hidden">
       {/* Background Elements */}
@@ -32,11 +34,21 @@ const Hero = () => {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <Button variant="hero" size="xl" className="group">
+              <Button 
+                variant="hero" 
+                size="xl" 
+                className="group"
+                onClick={() => navigate("/register")}
+              >
                 Sign Up FREE Today
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Button>
-              <Button variant="hero-outline" size="xl" className="group">
+              <Button 
+                variant="hero-outline" 
+                size="xl" 
+                className="group"
+                onClick={() => navigate("/book-appointment")}
+              >
                 <Play className="w-5 h-5" />
                 Watch Demo
               </Button>
@@ -86,7 +98,12 @@ const Hero = () => {
                     ))}
                   </div>
 
-                  <Button variant="cta" className="w-full" size="lg">
+                  <Button 
+                    variant="cta" 
+                    className="w-full" 
+                    size="lg"
+                    onClick={() => navigate("/book-appointment")}
+                  >
                     Book Appointment
                   </Button>
                 </div>

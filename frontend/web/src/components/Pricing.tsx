@@ -1,13 +1,25 @@
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Check, Star } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { adminAPI } from "@/lib/api";
 
-const plans = [
+interface PricingPlan {
+  name: string;
+  description: string;
+  installationPrice: number;
+  monthlyPrice: number;
+  features: string[];
+  popular: boolean;
+  cta: string;
+}
+
+const defaultPlans: PricingPlan[] = [
   {
     name: "Starter",
     description: "For 1 Doctor / 1 Hospital",
-    installationPrice: 5000,
-    monthlyPrice: 1000,
+    installationPrice: 1,
+    monthlyPrice: 1,
     features: [
       "1 Doctor profile",
       "1 Hospital",
@@ -22,8 +34,8 @@ const plans = [
   {
     name: "Professional",
     description: "For 5 Doctors in 1 Hospital",
-    installationPrice: 10000,
-    monthlyPrice: 2000,
+    installationPrice: 5,
+    monthlyPrice: 5,
     features: [
       "Up to 5 Doctor profiles",
       "1 Hospital",
@@ -39,8 +51,8 @@ const plans = [
   {
     name: "Enterprise",
     description: "For 10 Doctors & 5 Hospitals",
-    installationPrice: 20000,
-    monthlyPrice: 5000,
+    installationPrice: 10,
+    monthlyPrice: 10,
     features: [
       "Up to 10 Doctor profiles",
       "Up to 5 Hospitals (same ownership)",
@@ -57,12 +69,89 @@ const plans = [
 
 const Pricing = () => {
   const navigate = useNavigate();
+  const [plans, setPlans] = useState<PricingPlan[]>(defaultPlans);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadPricing = async () => {
+      try {
+        const pricing = await adminAPI.getPublicPricing();
+        if (pricing?.plans && Array.isArray(pricing.plans) && pricing.plans.length > 0) {
+          // Transform backend pricing to frontend format
+          // Handle both formats: new format (price/period) and old format (installationPrice/monthlyPrice)
+          const transformedPlans: PricingPlan[] = pricing.plans.map((plan: any) => {
+            // Check if it's the new format (has 'price' field)
+            if (plan.price !== undefined) {
+              // New format: price is monthly, need to calculate installation and monthly
+              const monthlyPrice = typeof plan.price === 'string' ? parseFloat(plan.price) : plan.price;
+              // For installation, use a multiplier (e.g., 5x monthly) or set a default
+              // You can adjust this logic based on your business rules
+              const installationPrice = monthlyPrice * 5; // 5 months worth as installation
+              
+              return {
+                name: plan.name || "Plan",
+                description: plan.description || `${plan.name} Package`,
+                installationPrice: installationPrice,
+                monthlyPrice: monthlyPrice,
+                features: Array.isArray(plan.features) ? plan.features : [],
+                popular: plan.popular || false,
+                cta: plan.name === "Enterprise" ? "Contact Sales" : "Get Started",
+              };
+            } else {
+              // Old format: has installationPrice and monthlyPrice
+              return {
+                name: plan.name || plan.plan_name || "Plan",
+                description: plan.description || `${plan.name} Package`,
+                installationPrice: plan.installationPrice || plan.installation || plan.installation_price || 0,
+                monthlyPrice: plan.monthlyPrice || plan.monthly || plan.monthly_price || 0,
+                features: Array.isArray(plan.features) ? plan.features : [],
+                popular: plan.popular || false,
+                cta: plan.name === "Enterprise" ? "Contact Sales" : "Get Started",
+              };
+            }
+          });
+          
+          // Only update if we got valid plans with prices > 0
+          if (transformedPlans.length > 0 && transformedPlans.every(p => p.installationPrice > 0 && p.monthlyPrice > 0)) {
+            setPlans(transformedPlans);
+          } else {
+            console.warn("Invalid pricing data received, using defaults");
+            setPlans(defaultPlans);
+          }
+        } else {
+          // No plans or empty array, use defaults
+          setPlans(defaultPlans);
+        }
+      } catch (error) {
+        console.error("Error loading pricing:", error);
+        // Use default plans on error
+        setPlans(defaultPlans);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadPricing();
+  }, []);
 
   const handlePlanClick = (plan: typeof plans[0]) => {
     // Navigate to hospital registration page with plan details
     const registrationUrl = `/register-hospital?plan=${encodeURIComponent(plan.name)}&amount=${plan.installationPrice}`;
-    window.location.href = registrationUrl;
+    navigate(registrationUrl);
   };
+
+  if (loading) {
+    return (
+      <section id="pricing" className="py-16 lg:py-24 relative">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-muted-foreground">Loading pricing plans...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section id="pricing" className="py-16 lg:py-24 relative">

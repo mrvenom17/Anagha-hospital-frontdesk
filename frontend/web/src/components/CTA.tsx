@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Bell, Clock } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const CTA = () => {
+  const navigate = useNavigate();
   return (
     <section className="py-16 lg:py-24 relative overflow-hidden">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 relative">
@@ -20,7 +22,12 @@ const CTA = () => {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button variant="cta" size="xl" className="group bg-card text-foreground hover:bg-card/90">
+              <Button 
+                variant="cta" 
+                size="xl" 
+                className="group bg-card text-foreground hover:bg-card/90"
+                onClick={() => navigate("/register")}
+              >
                 Get Started FREE
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Button>

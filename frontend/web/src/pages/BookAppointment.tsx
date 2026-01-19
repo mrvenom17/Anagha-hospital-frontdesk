@@ -1,13 +1,15 @@
-import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Heart, User, Phone, Calendar, Clock, MapPin, Stethoscope, FileText, ArrowRight, CreditCard, Loader2 } from "lucide-react";
+import { Heart, User, Phone, Calendar, Clock, MapPin, Stethoscope, FileText, ArrowRight, CreditCard, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
-import { hospitalsAPI, doctorsAPI, appointmentsAPI, operationsAPI, paymentsAPI, apiRequest } from "@/lib/api";
-import { getCurrentUser } from "@/lib/auth";
+import { hospitalsAPI, doctorsAPI, appointmentsAPI, operationsAPI, paymentsAPI } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { useLoading } from "@/contexts/LoadingContext";
+import { load } from "@cashfreepayments/cashfree-js";
 
 type BookingType = "appointment" | "operation";
 
@@ -37,13 +39,19 @@ const specialties = [
   "Dentistry",
 ];
 
-type PaymentMethod = "upi" | "card";
+// Payment state persistence key
+const PAYMENT_STATE_KEY = "pending_payment_state";
+
+interface PendingPaymentState {
+  bookingId: number;
+  bookingType: "appointment" | "operation";
+  paymentId: number;
+  paymentSessionId: string;
+  timestamp: number;
+}
 
 const BookAppointment = () => {
   const [bookingType, setBookingType] = useState<BookingType>("appointment");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("upi");
-  const [selectedUpi, setSelectedUpi] = useState("default");
-  const [upiId, setUpiId] = useState("");
   const [hospitals, setHospitals] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -58,53 +66,254 @@ const BookAppointment = () => {
     notes: "",
   });
   const [errors, setErrors] = useState<FormErrors>({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [paymentOrder, setPaymentOrder] = useState<any>(null);
-  const [bookingData, setBookingData] = useState<{id: number; type: "appointment" | "operation"} | null>(null);
-  const [paymentStatus, setPaymentStatus] = useState<"pending" | "processing" | "completed" | "failed">("pending");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Payment state
+  const [paymentState, setPaymentState] = useState<PendingPaymentState | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<"idle" | "pending" | "verifying" | "success" | "failed">("idle");
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
+  const { setLoading } = useLoading();
+  const [searchParams] = useSearchParams();
+  
+  const verificationPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasCheckedPaymentOnMountRef = useRef(false);
+  const hasFetchedDataRef = useRef(false);
 
-  // Load Razorpay script
+  // Load Cashfree SDK
   useEffect(() => {
-    const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
-    
-    if (!existingScript && !(window as any).Razorpay) {
-      const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.async = true;
-      script.onload = () => {
-        console.log("Razorpay script loaded successfully");
-      };
-      script.onerror = () => {
-        console.error("Failed to load Razorpay script");
-      };
-      document.body.appendChild(script);
-    }
-  }, []);
-
-  useEffect(() => {
-    const fetchData = async () => {
+    const loadCashfree = async () => {
       try {
-        const [hospitalsData, doctorsData] = await Promise.all([
-          hospitalsAPI.getApproved(),
-          doctorsAPI.getAll(),
-        ]);
-        setHospitals(hospitalsData || []);
-        setDoctors(doctorsData || []);
-      } catch (error) {
-        console.error("Error fetching data:", error);
-        toast({
-          title: "Error",
-          description: "Failed to load hospitals and doctors. Please refresh the page.",
-          variant: "destructive",
-        });
-      } finally {
-        setLoadingData(false);
+        console.log("🔵 DEBUG: Loading Cashfree SDK...");
+        const cashfree = await load();
+        console.log("✅ DEBUG: Cashfree SDK loaded successfully", cashfree);
+        // Verify SDK is properly initialized
+        if (cashfree && typeof cashfree.checkout === 'function') {
+          console.log("✅ DEBUG: Cashfree checkout method available");
+        } else {
+          console.error("❌ DEBUG: Cashfree checkout method not available");
+        }
+      } catch (error: any) {
+        console.error("❌ DEBUG: Failed to load Cashfree SDK:", error);
+        console.error("❌ DEBUG: Error details:", error.message, error.stack);
       }
     };
+    loadCashfree();
+  }, []);
+
+  // Check for pending payment on mount (resume payment after refresh)
+  useEffect(() => {
+    if (hasCheckedPaymentOnMountRef.current) return;
+    hasCheckedPaymentOnMountRef.current = true;
+
+    const checkPendingPayment = async () => {
+      try {
+        const storedState = localStorage.getItem(PAYMENT_STATE_KEY);
+        if (!storedState) return;
+
+        const pendingState: PendingPaymentState = JSON.parse(storedState);
+        
+        // Check if payment state is less than 24 hours old
+        const stateAge = Date.now() - pendingState.timestamp;
+        if (stateAge > 24 * 60 * 60 * 1000) {
+          // Clear stale state
+          localStorage.removeItem(PAYMENT_STATE_KEY);
+          return;
+        }
+
+        // Check payment status from backend
+        setPaymentState(pendingState);
+        setPaymentStatus("verifying");
+        await verifyPaymentStatus(pendingState.paymentId);
+      } catch (error) {
+        console.error("Error checking pending payment:", error);
+        // Clear invalid state
+        localStorage.removeItem(PAYMENT_STATE_KEY);
+      }
+    };
+
+    checkPendingPayment();
+  }, []);
+
+  // Verify payment status with backend (NEVER trust client-side callback)
+  const verifyPaymentStatus = async (paymentId: number): Promise<boolean> => {
+    try {
+      setPaymentStatus("verifying");
+      setVerificationError(null);
+
+      // ALWAYS verify via backend before confirming booking
+      const statusResponse = await paymentsAPI.getPaymentStatus(paymentId);
+      
+      if (statusResponse.status === "COMPLETED") {
+        // Payment verified - booking is confirmed by webhook
+        setPaymentStatus("success");
+        clearPaymentState();
+        
+        if (isAuthenticated) {
+          toast({
+            title: "Payment Successful",
+            description: "Your booking has been confirmed! Redirecting to your dashboard...",
+          });
+          // Redirect to patient dashboard (appointment history will be updated there)
+          setTimeout(() => {
+            navigate("/patient-dashboard");
+          }, 2000);
+        } else {
+          toast({
+            title: "Payment Successful",
+            description: "Your booking has been confirmed! A confirmation email has been sent to you.",
+          });
+          // For guest users, show success message (email is sent by backend webhook)
+          // User can continue or go home
+        }
+        
+        return true;
+      } else if (statusResponse.status === "FAILED") {
+        setPaymentStatus("failed");
+        setVerificationError("Payment failed. Please try again.");
+        clearPaymentState();
+        
+        toast({
+          title: "Payment Failed",
+          description: "Your payment could not be processed. Please try again.",
+          variant: "destructive",
+        });
+        
+        return false;
+      } else {
+        // Still pending - continue polling
+        setPaymentStatus("pending");
+        return false;
+      }
+    } catch (error: any) {
+      console.error("Error verifying payment:", error);
+      setVerificationError(error.message || "Failed to verify payment status");
+      setPaymentStatus("failed");
+      return false;
+    }
+  };
+
+  // Poll payment status (with exponential backoff)
+  const startPaymentVerification = (paymentId: number) => {
+    // Clear any existing interval
+    if (verificationPollIntervalRef.current) {
+      clearInterval(verificationPollIntervalRef.current);
+    }
+
+    let pollCount = 0;
+    const maxPolls = 30; // Poll for up to 5 minutes (30 * 10s)
+    
+    verificationPollIntervalRef.current = setInterval(async () => {
+      pollCount++;
+      
+      if (pollCount >= maxPolls) {
+        // Stop polling after max attempts
+        if (verificationPollIntervalRef.current) {
+          clearInterval(verificationPollIntervalRef.current);
+          verificationPollIntervalRef.current = null;
+        }
+        
+        // Final verification attempt
+        const verified = await verifyPaymentStatus(paymentId);
+        if (!verified) {
+          setVerificationError("Payment verification timed out. Please check your booking status manually.");
+        }
+        return;
+      }
+
+      const verified = await verifyPaymentStatus(paymentId);
+      if (verified) {
+        // Stop polling on success
+        if (verificationPollIntervalRef.current) {
+          clearInterval(verificationPollIntervalRef.current);
+          verificationPollIntervalRef.current = null;
+        }
+      }
+    }, 10000); // Poll every 10 seconds
+  };
+
+  const clearPaymentState = () => {
+    localStorage.removeItem(PAYMENT_STATE_KEY);
+    setPaymentState(null);
+    if (verificationPollIntervalRef.current) {
+      clearInterval(verificationPollIntervalRef.current);
+      verificationPollIntervalRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (verificationPollIntervalRef.current) {
+        clearInterval(verificationPollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Load hospitals and doctors - only once on mount
+  useEffect(() => {
+    // Prevent duplicate calls
+    if (hasFetchedDataRef.current) return;
+    hasFetchedDataRef.current = true;
+
+    let isMounted = true;
+
+    const fetchData = async () => {
+      setLoadingData(true);
+      setLoading(true);
+      
+      try {
+        const [hospitalsData, doctorsData] = await Promise.all([
+          hospitalsAPI.getApproved().catch((err) => {
+            console.error("Error fetching hospitals:", err);
+            return [];
+          }),
+          doctorsAPI.getAll().catch((err) => {
+            console.error("Error fetching doctors:", err);
+            return [];
+          }),
+        ]);
+        
+        // Only update state if component is still mounted
+        if (isMounted) {
+          setHospitals(hospitalsData || []);
+          setDoctors(doctorsData || []);
+          
+          if ((!hospitalsData || hospitalsData.length === 0) && (!doctorsData || doctorsData.length === 0)) {
+            toast({
+              title: "No Data Available",
+              description: "Unable to load hospitals and doctors. Please check your connection and try again.",
+              variant: "destructive",
+            });
+          }
+        }
+      } catch (error: any) {
+        console.error("Error fetching data:", error);
+        if (isMounted) {
+          toast({
+            title: "Error",
+            description: error.message || "Failed to load hospitals and doctors. Please refresh the page.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingData(false);
+          setLoading(false);
+        }
+      }
+    };
+
     fetchData();
-  }, [toast]);
+
+    // Cleanup function
+    return () => {
+      isMounted = false;
+    };
+  }, []); // Empty dependency array - only run once on mount
 
   const handleChange = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setFormData((prev) => ({ ...prev, [field]: e.target.value }));
@@ -116,6 +325,7 @@ const BookAppointment = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
+    setVerificationError(null);
 
     const result = bookingSchema.safeParse(formData);
     
@@ -129,20 +339,10 @@ const BookAppointment = () => {
       return;
     }
 
-    setIsLoading(true);
-    
-    try {
-      const currentUser = await getCurrentUser();
-      if (!currentUser) {
-        toast({
-          title: "Authentication Required",
-          description: "Please login to book an appointment.",
-          variant: "destructive",
-        });
-        navigate("/login");
-        return;
-      }
+    setIsSubmitting(true);
+    setLoading(true);
 
+    try {
       const selectedHospital = hospitals.find(h => h.name === formData.hospital || h.id.toString() === formData.hospital);
       const selectedDoctor = doctors.find(d => d.name === formData.doctor || d.id.toString() === formData.doctor);
       
@@ -154,16 +354,39 @@ const BookAppointment = () => {
       const timeSlot = formData.time.includes(":") ? formData.time.substring(0, 5) : formData.time;
 
       // Step 1: Create booking (status: pending)
+      // Support both authenticated users and guests
       let bookingResult: any;
       if (bookingType === "appointment") {
-        bookingResult = await appointmentsAPI.book({
-          doctor_id: selectedDoctor.id,
-          date: formData.date,
-          time_slot: timeSlot,
-          reason: formData.notes || undefined,
-        });
-        setBookingData({ id: bookingResult.id, type: "appointment" });
+        if (isAuthenticated) {
+          // Authenticated user booking
+          bookingResult = await appointmentsAPI.book({
+            doctor_id: selectedDoctor.id,
+            date: formData.date,
+            time_slot: timeSlot,
+            reason: formData.notes || undefined,
+          });
+        } else {
+          // Guest booking (no auth required)
+          bookingResult = await appointmentsAPI.bookGuest({
+            patient_name: formData.patientName,
+            patient_phone: formData.phone,
+            doctor_id: selectedDoctor.id,
+            date: formData.date,
+            time_slot: timeSlot,
+            reason: formData.notes || undefined,
+          });
+        }
       } else {
+        // Operations still require authentication
+        if (!isAuthenticated) {
+          toast({
+            title: "Authentication Required",
+            description: "Please login to book an operation.",
+            variant: "destructive",
+          });
+          navigate("/login", { state: { from: "/book-appointment" } });
+          return;
+        }
         bookingResult = await operationsAPI.book({
           hospital_id: selectedHospital.id,
           doctor_id: selectedDoctor.id,
@@ -171,165 +394,95 @@ const BookAppointment = () => {
           specialty: formData.specialty,
           notes: formData.notes || undefined,
         });
-        setBookingData({ id: bookingResult.id, type: "operation" });
       }
 
-      // Step 2: Create Razorpay payment order
-      // Default amount (can be fetched from hospital settings)
+      // Step 2: Create Cashfree payment order
+      // TODO: Fetch consultation fee from hospital settings when endpoint is available
       const defaultAmount = 500; // Default consultation fee
       
-      const orderData = await apiRequest<any>('/api/payments/create-order', {
-        method: 'POST',
-        body: JSON.stringify({
-          appointment_id: bookingType === "appointment" ? bookingResult.id : null,
-          operation_id: bookingType === "operation" ? bookingResult.id : null,
-          amount: defaultAmount,
-          currency: "INR",
-        }),
-      });
+      const orderData = await paymentsAPI.createOrder({
+        appointment_id: bookingType === "appointment" ? bookingResult.id : undefined,
+        operation_id: bookingType === "operation" ? bookingResult.id : undefined,
+        amount: defaultAmount,
+        currency: "INR",
+      }, !isAuthenticated); // Pass isGuest flag
 
-      if (!orderData || !orderData.order_id) {
+      if (!orderData || !orderData.payment_session_id) {
         throw new Error("Failed to create payment order");
       }
 
-      setPaymentOrder(orderData);
-      setIsLoading(false);
-
-      // Step 3: Open Razorpay payment modal
-      if (!(window as any).Razorpay) {
-        throw new Error("Payment gateway not loaded. Please refresh the page.");
-      }
-
-      const options = {
-        key: orderData.key_id,
-        amount: orderData.amount * 100, // Convert to paise
-        currency: orderData.currency || "INR",
-        name: "Anagha Health Connect",
-        description: `${bookingType === "appointment" ? "Appointment" : "Operation"} Booking - ${selectedDoctor.name}`,
-        order_id: orderData.order_id,
-        handler: async function (response: any) {
-          try {
-            setPaymentStatus("processing");
-            
-            // Step 4: Verify payment immediately
-            try {
-              await paymentsAPI.verifyPayment(orderData.payment_id);
-            } catch (verifyError) {
-              console.log("Immediate verification failed, will poll status");
-            }
-            
-            // Poll payment status (webhook might take a moment)
-            let verified = false;
-            for (let i = 0; i < 10; i++) {
-              await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-              
-              try {
-                const statusResult = await paymentsAPI.getPaymentStatus(orderData.payment_id);
-                if (statusResult.status === "COMPLETED") {
-                  verified = true;
-                  setPaymentStatus("completed");
-                  
-                  // Step 5: Confirm booking after payment
-                  if (bookingType === "appointment") {
-                    await appointmentsAPI.confirm(bookingResult.id);
-                  } else {
-                    await operationsAPI.confirm(bookingResult.id);
-                  }
-                  
-                  toast({
-                    title: "Booking Confirmed!",
-                    description: `Your ${bookingType === "appointment" ? "appointment" : "operation"} has been confirmed for ${formData.date} at ${timeSlot}.`,
-                  });
-                  
-                  // Step 6: Redirect to My Appointments
-                  setTimeout(() => {
-                    navigate("/my-appointments");
-                  }, 1500);
-                  break;
-                } else if (statusResult.status === "FAILED") {
-                  setPaymentStatus("failed");
-                  toast({
-                    title: "Payment Failed",
-                    description: "Your payment could not be processed. Please try again.",
-                    variant: "destructive",
-                  });
-                  setIsLoading(false);
-                  break;
-                }
-              } catch (err) {
-                console.log("Polling attempt failed, retrying...", err);
-                // Continue polling
-              }
-            }
-            
-            if (!verified) {
-              setPaymentStatus("pending");
-              setIsLoading(false);
-              toast({
-                title: "Payment Processing",
-                description: "Your payment is being processed. Please check your appointments page in a moment.",
-              });
-              // Still redirect, payment will be verified by webhook
-              setTimeout(() => {
-                navigate("/my-appointments");
-              }, 2000);
-            }
-          } catch (error: any) {
-            setPaymentStatus("failed");
-            setIsLoading(false);
-            toast({
-              title: "Payment Verification Error",
-              description: error.message || "Failed to verify payment. Please check your appointments page.",
-              variant: "destructive",
-            });
-            // Still redirect to appointments page
-            setTimeout(() => {
-              navigate("/my-appointments");
-            }, 2000);
-          }
-        },
-        prefill: {
-          email: currentUser.email || "",
-          contact: currentUser.mobile || "",
-        },
-        theme: {
-          color: "#4F46E5",
-        },
-        modal: {
-          ondismiss: function() {
-            setPaymentStatus("pending");
-            setIsLoading(false);
-          },
-        },
+      // Step 3: Store payment state for resume after refresh
+      const pendingState: PendingPaymentState = {
+        bookingId: bookingResult.id,
+        bookingType: bookingType,
+        paymentId: orderData.payment_id,
+        paymentSessionId: orderData.payment_session_id,
+        timestamp: Date.now(),
       };
+      
+      setPaymentState(pendingState);
+      localStorage.setItem(PAYMENT_STATE_KEY, JSON.stringify(pendingState));
 
-      const razorpay = new (window as any).Razorpay(options);
-      razorpay.open();
+      // Step 4: Redirect to payments page with payment details
+      // Store payment info in localStorage for payments page
+      const paymentInfo = {
+        payment_id: orderData.payment_id,
+        payment_session_id: orderData.payment_session_id,
+        amount: defaultAmount,
+        booking_id: bookingResult.id,
+        booking_type: bookingType,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('pending_payment_info', JSON.stringify(paymentInfo));
+      
+      // Redirect to payments page
+      navigate(`/payments?appointment=${bookingResult.id}&payment=${orderData.payment_id}&session=${orderData.payment_session_id}`);
     } catch (error: any) {
       console.error("Booking error:", error);
+      setPaymentStatus("failed");
+      clearPaymentState();
+      
       toast({
         title: "Booking Failed",
         description: error.message || "Failed to book appointment. Please try again.",
         variant: "destructive",
       });
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
+      setLoading(false);
+    }
+  };
+
+  // Retry payment
+  const handleRetryPayment = async () => {
+    if (!paymentState) return;
+
+    setVerificationError(null);
+    setPaymentStatus("verifying");
+    
+    try {
+      // Re-verify payment status
+      const verified = await verifyPaymentStatus(paymentState.paymentId);
+      
+      if (!verified && paymentStatus !== "success") {
+        // If still pending, resume polling
+        startPaymentVerification(paymentState.paymentId);
+      }
+    } catch (error: any) {
+      setVerificationError(error.message || "Failed to verify payment");
+      setPaymentStatus("failed");
     }
   };
 
   const filteredDoctors = formData.specialty && doctors.length > 0
-    ? doctors.filter(d => {
-        // Since doctors from API might not have specialty, we can't filter by it
-        // Just return all doctors for now
-        return true;
-      })
+    ? doctors.filter(d => true) // Filter logic can be added here
     : doctors;
 
   if (loadingData) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <Loader2 className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-muted-foreground">Loading hospitals and doctors...</p>
         </div>
       </div>
@@ -361,16 +514,113 @@ const BookAppointment = () => {
             </p>
           </div>
 
+          {/* Payment Status Banner */}
+          {paymentStatus !== "idle" && (
+            <div className={`mb-6 rounded-xl border p-4 ${
+              paymentStatus === "success" 
+                ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+                : paymentStatus === "failed"
+                ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
+                : "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800"
+            }`}>
+              <div className="flex items-start gap-3">
+                {paymentStatus === "success" && <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5" />}
+                {paymentStatus === "failed" && <XCircle className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5" />}
+                {(paymentStatus === "pending" || paymentStatus === "verifying") && (
+                  <Loader2 className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin mt-0.5" />
+                )}
+                
+                <div className="flex-1">
+                  {paymentStatus === "success" && (
+                    <div>
+                      <p className="text-sm font-medium text-green-900 dark:text-green-100">
+                        Payment Successful!
+                      </p>
+                      <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                        {isAuthenticated 
+                          ? "Your booking has been confirmed. Redirecting to your dashboard..."
+                          : "Your booking has been confirmed! A confirmation email has been sent to you."}
+                      </p>
+                      {!isAuthenticated && (
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            onClick={() => navigate("/")}
+                            variant="outline"
+                            size="sm"
+                          >
+                            Go to Home
+                          </Button>
+                          <Button
+                            onClick={() => navigate("/book-appointment")}
+                            variant="hero"
+                            size="sm"
+                          >
+                            Book Another
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {paymentStatus === "failed" && (
+                    <div>
+                      <p className="text-sm font-medium text-red-900 dark:text-red-100">
+                        Payment {verificationError ? "Verification Failed" : "Failed"}
+                      </p>
+                      <p className="text-xs text-red-700 dark:text-red-300 mt-1">
+                        {verificationError || "Your payment could not be processed. Please try again."}
+                      </p>
+                      {paymentState && (
+                        <Button
+                          onClick={handleRetryPayment}
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                        >
+                          Retry Payment Verification
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  
+                  {(paymentStatus === "pending" || paymentStatus === "verifying") && (
+                    <div>
+                      <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                        {paymentStatus === "verifying" ? "Verifying Payment..." : "Payment Pending"}
+                      </p>
+                      <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                        {paymentStatus === "verifying" 
+                          ? "Please wait while we verify your payment with the payment gateway."
+                          : "Please complete the payment or wait while we verify your payment status."}
+                      </p>
+                      {paymentState && paymentStatus === "pending" && (
+                        <Button
+                          onClick={handleRetryPayment}
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                        >
+                          Check Payment Status
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Booking Type Toggle */}
           <div className="flex gap-4 mb-8">
             <button
               type="button"
               onClick={() => setBookingType("appointment")}
+              disabled={isSubmitting || paymentStatus === "verifying"}
               className={`flex-1 flex items-center justify-center gap-3 p-4 rounded-xl border-2 transition-all ${
                 bookingType === "appointment"
                   ? "border-primary bg-primary/5 text-primary"
                   : "border-border bg-card hover:border-primary/50 text-muted-foreground"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Calendar className="w-6 h-6" />
               <span className="font-medium">Book Appointment</span>
@@ -378,11 +628,12 @@ const BookAppointment = () => {
             <button
               type="button"
               onClick={() => setBookingType("operation")}
+              disabled={isSubmitting || paymentStatus === "verifying"}
               className={`flex-1 flex items-center justify-center gap-3 p-4 rounded-xl border-2 transition-all ${
                 bookingType === "operation"
                   ? "border-primary bg-primary/5 text-primary"
                   : "border-border bg-card hover:border-primary/50 text-muted-foreground"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Stethoscope className="w-6 h-6" />
               <span className="font-medium">Schedule Operation</span>
@@ -406,6 +657,7 @@ const BookAppointment = () => {
                       placeholder="Full name"
                       value={formData.patientName}
                       onChange={handleChange("patientName")}
+                      disabled={isSubmitting || paymentStatus === "verifying"}
                       className={`pl-10 h-12 ${errors.patientName ? "border-destructive" : ""}`}
                     />
                   </div>
@@ -425,6 +677,7 @@ const BookAppointment = () => {
                       placeholder="+91-XXXXXXXXXX"
                       value={formData.phone}
                       onChange={handleChange("phone")}
+                      disabled={isSubmitting || paymentStatus === "verifying"}
                       className={`pl-10 h-12 ${errors.phone ? "border-destructive" : ""}`}
                     />
                   </div>
@@ -445,29 +698,51 @@ const BookAppointment = () => {
                       type="date"
                       value={formData.date}
                       onChange={handleChange("date")}
+                      disabled={isSubmitting || paymentStatus === "verifying"}
                       className={`pl-10 h-12 ${errors.date ? "border-destructive" : ""}`}
                     />
                   </div>
                   {errors.date && <p className="text-sm text-destructive">{errors.date}</p>}
                 </div>
 
-                {/* Time */}
-                <div className="space-y-2">
-                  <Label htmlFor="time" className="text-foreground font-medium">
-                    Preferred Time
-                  </Label>
-                  <div className="relative">
-                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                    <Input
-                      id="time"
-                      type="time"
-                      value={formData.time}
-                      onChange={handleChange("time")}
-                      className={`pl-10 h-12 ${errors.time ? "border-destructive" : ""}`}
-                    />
-                  </div>
-                  {errors.time && <p className="text-sm text-destructive">{errors.time}</p>}
+              {/* Time */}
+              <div className="space-y-2">
+                <Label htmlFor="time" className="text-foreground font-medium">
+                  Preferred Time
+                </Label>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground z-10 pointer-events-none" />
+                  <select
+                    id="time"
+                    value={formData.time}
+                    onChange={handleChange("time")}
+                    disabled={isSubmitting || paymentStatus === "verifying"}
+                    className={`w-full h-12 rounded-md border bg-background pl-10 pr-3 text-foreground ${errors.time ? "border-destructive" : "border-input"} disabled:opacity-50 disabled:cursor-not-allowed appearance-none`}
+                  >
+                    <option value="">Select time</option>
+                    <option value="09:30">09:30 AM</option>
+                    <option value="10:00">10:00 AM</option>
+                    <option value="10:30">10:30 AM</option>
+                    <option value="11:00">11:00 AM</option>
+                    <option value="11:30">11:30 AM</option>
+                    <option value="12:00">12:00 PM</option>
+                    <option value="12:30">12:30 PM</option>
+                    <option value="13:00">01:00 PM</option>
+                    <option value="13:30">01:30 PM</option>
+                    <option value="14:00">02:00 PM</option>
+                    <option value="14:30">02:30 PM</option>
+                    <option value="15:00">03:00 PM</option>
+                    <option value="15:30">03:30 PM</option>
+                    <option value="18:00">06:00 PM</option>
+                    <option value="18:30">06:30 PM</option>
+                    <option value="19:00">07:00 PM</option>
+                    <option value="19:30">07:30 PM</option>
+                    <option value="20:00">08:00 PM</option>
+                    <option value="20:30">08:30 PM</option>
+                  </select>
                 </div>
+                {errors.time && <p className="text-sm text-destructive">{errors.time}</p>}
+              </div>
               </div>
 
               {/* Specialty */}
@@ -479,7 +754,8 @@ const BookAppointment = () => {
                   id="specialty"
                   value={formData.specialty}
                   onChange={handleChange("specialty")}
-                  className={`w-full h-12 rounded-md border bg-background px-3 text-foreground ${errors.specialty ? "border-destructive" : "border-input"}`}
+                  disabled={isSubmitting || paymentStatus === "verifying"}
+                  className={`w-full h-12 rounded-md border bg-background px-3 text-foreground ${errors.specialty ? "border-destructive" : "border-input"} disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   <option value="">Select specialty</option>
                   {specialties.map((s) => (
@@ -498,7 +774,8 @@ const BookAppointment = () => {
                   id="doctor"
                   value={formData.doctor}
                   onChange={handleChange("doctor")}
-                  className={`w-full h-12 rounded-md border bg-background px-3 text-foreground ${errors.doctor ? "border-destructive" : "border-input"}`}
+                  disabled={isSubmitting || paymentStatus === "verifying"}
+                  className={`w-full h-12 rounded-md border bg-background px-3 text-foreground ${errors.doctor ? "border-destructive" : "border-input"} disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   <option value="">Select doctor</option>
                   {filteredDoctors.map((d) => (
@@ -519,7 +796,8 @@ const BookAppointment = () => {
                     id="hospital"
                     value={formData.hospital}
                     onChange={handleChange("hospital")}
-                    className={`w-full h-12 rounded-md border bg-background px-10 text-foreground ${errors.hospital ? "border-destructive" : "border-input"}`}
+                    disabled={isSubmitting || paymentStatus === "verifying"}
+                    className={`w-full h-12 rounded-md border bg-background px-10 text-foreground ${errors.hospital ? "border-destructive" : "border-input"} disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     <option value="">Select hospital</option>
                     {hospitals.map((h) => (
@@ -543,71 +821,28 @@ const BookAppointment = () => {
                     onChange={handleChange("notes")}
                     placeholder="Any special requirements or notes..."
                     rows={3}
-                    className={`w-full rounded-md border bg-background px-10 py-3 text-foreground ${errors.notes ? "border-destructive" : "border-input"}`}
+                    disabled={isSubmitting || paymentStatus === "verifying"}
+                    className={`w-full rounded-md border bg-background px-10 py-3 text-foreground ${errors.notes ? "border-destructive" : "border-input"} disabled:opacity-50 disabled:cursor-not-allowed`}
                   />
                 </div>
               </div>
-
-              {/* Payment Status Indicator */}
-              {paymentStatus === "processing" && (
-                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-center gap-3">
-                  <Loader2 className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin" />
-                  <div>
-                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                      Verifying Payment...
-                    </p>
-                    <p className="text-xs text-blue-700 dark:text-blue-300">
-                      Please wait while we confirm your payment.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {paymentStatus === "completed" && (
-                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 flex items-center gap-3">
-                  <div className="w-5 h-5 rounded-full bg-green-600 flex items-center justify-center">
-                    <span className="text-white text-xs">✓</span>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-green-900 dark:text-green-100">
-                      Payment Successful!
-                    </p>
-                    <p className="text-xs text-green-700 dark:text-green-300">
-                      Your booking is being confirmed...
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {paymentStatus === "failed" && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                  <p className="text-sm font-medium text-red-900 dark:text-red-100">
-                    Payment Failed
-                  </p>
-                  <p className="text-xs text-red-700 dark:text-red-300 mt-1">
-                    Please try again or contact support.
-                  </p>
-                </div>
-              )}
 
               {/* Submit Button */}
               <Button
                 type="submit"
                 variant="hero"
                 className="w-full h-12"
-                disabled={isLoading || paymentStatus === "processing" || paymentStatus === "completed"}
+                disabled={isSubmitting || paymentStatus === "verifying" || paymentStatus === "success"}
               >
-                {isLoading || paymentStatus === "processing" ? (
+                {isSubmitting || paymentStatus === "verifying" ? (
                   <span className="flex items-center gap-2">
-                    <span className="w-5 h-5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                    {paymentStatus === "processing" ? "Processing Payment..." : "Booking..."}
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    {paymentStatus === "verifying" ? "Verifying Payment..." : "Processing..."}
                   </span>
-                ) : paymentStatus === "completed" ? (
+                ) : paymentStatus === "success" ? (
                   <span className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-primary-foreground/20 flex items-center justify-center">
-                      <span className="text-primary-foreground text-xs">✓</span>
-                    </span>
-                    Redirecting...
+                    <CheckCircle className="w-5 h-5" />
+                    Payment Successful
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">

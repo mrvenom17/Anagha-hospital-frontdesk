@@ -6,6 +6,28 @@ import { Label } from "@/components/ui/label";
 import { Heart, Check, CreditCard, Smartphone, ArrowRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { paymentsAPI, apiRequest } from "@/lib/api";
+import { load } from "@cashfreepayments/cashfree-js";
+
+// Cashfree SDK instance (singleton pattern)
+let cashfreeInstance: any = null;
+
+// Get Cashfree SDK instance with proper mode configuration
+// IMPORTANT: Mode must match backend CASHFREE_API_URL:
+// - "sandbox" for https://sandbox.cashfree.com/pg
+// - "production" for https://api.cashfree.com/pg
+const getCashfree = async () => {
+  if (!cashfreeInstance) {
+    // Default to production to match backend default (https://api.cashfree.com/pg)
+    const mode = import.meta.env.VITE_CASHFREE_MODE || "production"; // "sandbox" | "production"
+    console.log("🔵 DEBUG: Loading Cashfree SDK with mode:", mode);
+    console.log("🔵 DEBUG: Backend should use:", mode === "sandbox" ? "https://sandbox.cashfree.com/pg" : "https://api.cashfree.com/pg");
+    cashfreeInstance = await load({
+      mode: mode as "sandbox" | "production",
+    });
+    console.log("✅ DEBUG: Cashfree SDK loaded successfully", cashfreeInstance);
+  }
+  return cashfreeInstance;
+};
 
 type PaymentMethod = "upi" | "card";
 
@@ -13,24 +35,24 @@ const packages = [
   {
     id: "starter",
     name: "Starter",
-    installation: 5000,
-    monthly: 1000,
+    installation: 1,
+    monthly: 1,
     features: ["Basic Appointment System", "Up to 5 Doctors", "Email Support", "Basic Analytics"],
     popular: false,
   },
   {
     id: "professional",
     name: "Professional",
-    installation: 10000,
-    monthly: 2000,
+    installation: 5,
+    monthly: 5,
     features: ["Advanced Booking System", "Up to 25 Doctors", "Priority Support", "Advanced Analytics", "Payment Integration"],
     popular: true,
   },
   {
     id: "enterprise",
     name: "Enterprise",
-    installation: 20000,
-    monthly: 5000,
+    installation: 10,
+    monthly: 10,
     features: ["Unlimited Doctors", "24/7 Dedicated Support", "Custom Integrations", "White-label Solution", "Multi-branch Support"],
     popular: false,
   },
@@ -48,6 +70,9 @@ const Payments = () => {
   const paymentType = searchParams.get("type"); // "hospital_registration" or null
   const planName = searchParams.get("plan");
   const amountParam = searchParams.get("amount");
+  const appointmentId = searchParams.get("appointment");
+  const paymentId = searchParams.get("payment");
+  const paymentSessionId = searchParams.get("session");
   
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("upi");
@@ -62,26 +87,93 @@ const Payments = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<any>(null);
   const [hospitalData, setHospitalData] = useState<any>(null);
+  const [appointmentPaymentData, setAppointmentPaymentData] = useState<{
+    appointmentId: string;
+    paymentId: string;
+    paymentSessionId: string;
+  } | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // Load Razorpay script
-  useEffect(() => {
-    const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
-    
-    if (!existingScript && !(window as any).Razorpay) {
-      const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.async = true;
-      script.onload = () => {
-        console.log("Razorpay script loaded successfully");
+  // Helper function to open Cashfree checkout
+  const openCashfreeCheckout = async (paymentSessionId: string) => {
+    try {
+      console.log("🚀 Opening Cashfree checkout", paymentSessionId);
+      console.log("🔵 DEBUG: Payment session ID:", paymentSessionId);
+      setIsProcessing(true);
+
+      const cashfree = await getCashfree();
+      console.log("✅ DEBUG: Cashfree instance:", cashfree);
+      console.log("✅ DEBUG: Available methods:", Object.keys(cashfree || {}));
+      
+      // Check which methods are available
+      const hasPay = typeof cashfree?.pay === 'function';
+      const hasCheckout = typeof cashfree?.checkout === 'function';
+      console.log("✅ DEBUG: pay method exists:", hasPay);
+      console.log("✅ DEBUG: checkout method exists:", hasCheckout);
+
+      const checkoutOptions = {
+        paymentSessionId,
+        redirectTarget: "_self" as const,
       };
-      script.onerror = () => {
-        console.error("Failed to load Razorpay script");
-      };
-      document.body.appendChild(script);
+      console.log("🔵 DEBUG: Checkout options:", checkoutOptions);
+
+      // Use checkout() method (standard Cashfree JS SDK method)
+      if (hasCheckout) {
+        console.log("🔵 DEBUG: Using cashfree.checkout() method");
+        cashfree.checkout(checkoutOptions);
+        console.log("✅ cashfree.checkout() called successfully");
+        // checkout() is synchronous and will redirect, so don't reset isProcessing
+      } else if (hasPay) {
+        console.log("🔵 DEBUG: Using cashfree.pay() method (checkout not available)");
+        // pay() might return a promise or need different handling
+        const result = await cashfree.pay(checkoutOptions);
+        console.log("✅ cashfree.pay() result:", result);
+      } else {
+        throw new Error("Neither pay() nor checkout() method available on Cashfree SDK");
+      }
+    } catch (err: any) {
+      console.error("❌ Cashfree payment failed:", err);
+      console.error("❌ Error details:", err?.message, err?.stack);
+      setIsProcessing(false);
+      toast({
+        title: "Payment Error",
+        description: err?.message || "Unable to open payment gateway. Please try again.",
+        variant: "destructive",
+      });
     }
-  }, []);
+  };
+
+  // Handle appointment payment - check URL params or localStorage (DO NOT AUTO-OPEN)
+  useEffect(() => {
+    if (appointmentId && paymentId && paymentSessionId) {
+      setAppointmentPaymentData({
+        appointmentId,
+        paymentId,
+        paymentSessionId,
+      });
+      // Don't auto-open - show "Resume Payment" button instead
+      console.log("🔵 DEBUG: Payment session found in URL - showing resume button");
+    } else {
+      // Check localStorage for pending payment
+      const stored = localStorage.getItem('pending_payment_info');
+      if (stored) {
+        try {
+          const paymentInfo = JSON.parse(stored);
+          if (paymentInfo.booking_type === 'appointment' && paymentInfo.payment_session_id) {
+            setAppointmentPaymentData({
+              appointmentId: String(paymentInfo.booking_id),
+              paymentId: String(paymentInfo.payment_id),
+              paymentSessionId: paymentInfo.payment_session_id,
+            });
+            console.log("🔵 DEBUG: Payment session found in localStorage - showing resume button");
+          }
+        } catch (error) {
+          console.error("Error loading payment info:", error);
+        }
+      }
+    }
+  }, [appointmentId, paymentId, paymentSessionId]);
 
   // Load hospital registration data if coming from registration
   useEffect(() => {
@@ -123,99 +215,26 @@ const Payments = () => {
       setIsProcessing(true);
       try {
         // Create payment order for hospital registration
+        console.log("🔵 FRONTEND DEBUG: Creating payment order with hospital data", hospitalData);
         const orderData = await paymentsAPI.createHospitalRegistrationOrder(
           hospitalData.selectedPlan.name,
-          hospitalData.selectedPlan.installationPrice
+          hospitalData.selectedPlan.installationPrice,
+          hospitalData.formData?.hospitalName || hospitalData.formData?.name,
+          hospitalData.formData?.phone || hospitalData.formData?.mobile,
+          hospitalData.formData?.email
         );
+        console.log("🔵 FRONTEND DEBUG: Payment order created", orderData);
 
-        if (!orderData || !orderData.order_id) {
-          throw new Error("Invalid payment order response. Missing order_id.");
+        if (!orderData || !orderData.payment_session_id) {
+          throw new Error("Invalid payment order response. Missing payment_session_id.");
         }
 
         setPaymentOrder(orderData);
 
-        // Open Razorpay checkout
-        if (!(window as any).Razorpay) {
-          throw new Error("Payment gateway not loaded. Please refresh the page.");
-        }
-
-        const options = {
-          key: orderData.key_id,
-          amount: orderData.amount * 100, // Convert to paise
-          currency: orderData.currency || "INR",
-          name: "Anagha Health Connect",
-          description: `Hospital Registration - ${hospitalData.selectedPlan.name} Package`,
-          order_id: orderData.order_id,
-          handler: async function (response: any) {
-            try {
-              setIsProcessing(true);
-              
-              // Poll payment status (webhook might take a moment)
-              let verified = false;
-              for (let i = 0; i < 10; i++) {
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-                
-                try {
-                  const statusResult = await paymentsAPI.getPaymentStatus(orderData.payment_id);
-                  if (statusResult.status === "COMPLETED") {
-                    verified = true;
-                    toast({
-                      title: "Payment Successful",
-                      description: "Your payment has been verified. Redirecting to complete registration...",
-                    });
-                    
-                    // Navigate back to registration with payment_id
-                    navigate(`/register-hospital?payment_id=${orderData.payment_id}`);
-                    break;
-                  } else if (statusResult.status === "FAILED") {
-                    toast({
-                      title: "Payment Failed",
-                      description: "Your payment could not be processed. Please try again.",
-                      variant: "destructive",
-                    });
-                    setIsProcessing(false);
-                    break;
-                  }
-                } catch (err) {
-                  // Continue polling
-                }
-              }
-              
-              if (!verified) {
-                // If still pending after polling, show message and allow manual check
-                toast({
-                  title: "Payment Processing",
-                  description: "Your payment is being processed. You can check status manually.",
-                });
-                setIsProcessing(false);
-              }
-            } catch (error: any) {
-              setIsProcessing(false);
-              toast({
-                title: "Payment Verification Error",
-                description: error.message || "Failed to verify payment.",
-                variant: "destructive",
-              });
-            }
-          },
-          prefill: {
-            email: hospitalData.formData?.email || "",
-            contact: hospitalData.formData?.phone || "",
-          },
-          theme: {
-            color: "#4F46E5",
-          },
-          modal: {
-            ondismiss: function() {
-              setIsProcessing(false);
-            },
-          },
-        };
-
-        const razorpay = new (window as any).Razorpay(options);
-        razorpay.open();
+        // Open Cashfree checkout using cashfree.pay()
+        await openCashfreeCheckout(orderData.payment_session_id);
       } catch (error: any) {
-        console.error("Error creating payment order:", error);
+        console.error("❌ DEBUG: Error creating payment order:", error);
         setIsProcessing(false);
         toast({
           title: "Payment Error",
@@ -250,87 +269,16 @@ const Payments = () => {
           }),
         });
 
-        if (!orderData || !orderData.order_id) {
-          throw new Error("Invalid payment order response. Missing order_id.");
+        if (!orderData || !orderData.payment_session_id) {
+          throw new Error("Invalid payment order response. Missing payment_session_id.");
         }
 
         setPaymentOrder(orderData);
 
-        // Open Razorpay checkout
-        if (!(window as any).Razorpay) {
-          throw new Error("Payment gateway not loaded. Please refresh the page.");
-        }
-
-        const options = {
-          key: orderData.key_id,
-          amount: orderData.amount * 100, // Convert to paise
-          currency: orderData.currency || "INR",
-          name: "Anagha Health Connect",
-          description: `Package Purchase - ${selectedPkg.name}`,
-          order_id: orderData.order_id,
-          handler: async function (response: any) {
-            try {
-              setIsProcessing(true);
-              
-              // Poll payment status
-              let verified = false;
-              for (let i = 0; i < 10; i++) {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                try {
-                  const statusResult = await paymentsAPI.getPaymentStatus(orderData.payment_id);
-                  if (statusResult.status === "COMPLETED") {
-                    verified = true;
-      toast({
-        title: "Payment Successful!",
-        description: `Your ${selectedPkg?.name} package has been activated. Thank you for choosing Anagha Health.`,
-      });
-      navigate("/");
-                    break;
-                  } else if (statusResult.status === "FAILED") {
-                    toast({
-                      title: "Payment Failed",
-                      description: "Your payment could not be processed. Please try again.",
-                      variant: "destructive",
-                    });
-                    setIsProcessing(false);
-                    break;
-                  }
-                } catch (err) {
-                  // Continue polling
-                }
-              }
-              
-              if (!verified) {
-                toast({
-                  title: "Payment Processing",
-                  description: "Your payment is being processed. You can check status manually.",
-                });
-                setIsProcessing(false);
-              }
-            } catch (error: any) {
-              setIsProcessing(false);
-              toast({
-                title: "Payment Verification Error",
-                description: error.message || "Failed to verify payment.",
-                variant: "destructive",
-              });
-            }
-          },
-          theme: {
-            color: "#4F46E5",
-          },
-          modal: {
-            ondismiss: function() {
-              setIsProcessing(false);
-            },
-          },
-        };
-
-        const razorpay = new (window as any).Razorpay(options);
-        razorpay.open();
+        // Open Cashfree checkout using cashfree.pay()
+        await openCashfreeCheckout(orderData.payment_session_id);
     } catch (error: any) {
-      console.error("Payment error:", error);
+      console.error("❌ DEBUG: Payment error:", error);
         setIsProcessing(false);
       toast({
         title: "Payment Failed",
@@ -374,14 +322,58 @@ const Payments = () => {
       <div className="container mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-3xl font-bold text-foreground mb-2">
-            {paymentType === "hospital_registration" ? "Complete Payment" : "Choose Your Plan"}
+            {appointmentPaymentData 
+              ? "Complete Payment" 
+              : paymentType === "hospital_registration" 
+                ? "Complete Payment" 
+                : "Choose Your Plan"}
           </h1>
           <p className="text-muted-foreground">
-            {paymentType === "hospital_registration" 
+            {appointmentPaymentData
+              ? "Please complete payment to confirm your appointment"
+              : paymentType === "hospital_registration" 
               ? "Complete payment to proceed with hospital registration"
               : "Select a package and complete payment"}
           </p>
         </div>
+        
+        {/* Resume Payment Button - Show if appointment payment session exists */}
+        {appointmentPaymentData && !isProcessing && (
+          <div className="max-w-xl mx-auto mb-8">
+            <div className="bg-card rounded-2xl shadow-elevated border border-border/50 p-8 text-center">
+              <h2 className="text-xl font-bold text-foreground mb-4">Complete Your Payment</h2>
+              <p className="text-muted-foreground mb-6">
+                Click the button below to resume your payment and complete your appointment booking.
+              </p>
+              <Button
+                onClick={() => openCashfreeCheckout(appointmentPaymentData.paymentSessionId)}
+                variant="hero"
+                size="lg"
+                className="w-full h-12"
+              >
+                <span className="flex items-center gap-2">
+                  <CreditCard className="w-5 h-5" />
+                  Resume Payment
+                </span>
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Processing State */}
+        {isProcessing && (
+          <div className="max-w-xl mx-auto mb-8">
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-6 text-center">
+              <Loader2 className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                Opening Payment Gateway...
+              </p>
+              <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                Please wait while we redirect you to complete your payment.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Package Selection - Only show if not hospital registration */}
         {paymentType !== "hospital_registration" && (

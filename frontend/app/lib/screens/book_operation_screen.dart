@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../services/payment_service.dart';
+import '../services/auth_service.dart';
+import '../services/doctor_service.dart';
 import '../models/hospital_model.dart';
 import '../utils/app_colors.dart';
+import '../widgets/doctor_autocomplete.dart';
 import '../widgets/city_autocomplete.dart';
 import 'dart:convert';
 
@@ -20,6 +22,7 @@ class BookOperationScreen extends StatefulWidget {
 
 class _BookOperationScreenState extends State<BookOperationScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _doctorController = TextEditingController();
   final _nameController = TextEditingController();
   final _mobileController = TextEditingController();
   final _placeController = TextEditingController();
@@ -30,18 +33,25 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
   Hospital? _selectedHospital;
   bool _isLoading = false;
   bool _showPaymentOptions = false;
-  String? _selectedPaymentMethod;
-  String? _paymentOrderId; // Store payment order ID
+  int? _paymentId;
+  String? _paymentSessionId;
+  int? _operationId;
+  Map<String, dynamic>? _selectedDoctor;
+  int? _selectedDoctorId;
+  String? _selectedSpecialty;
   List<Hospital> _hospitals = [];
 
   @override
   void initState() {
     super.initState();
     _loadHospitals();
+    _doctorController.addListener(_onDoctorNameChanged);
   }
 
   @override
   void dispose() {
+    _doctorController.removeListener(_onDoctorNameChanged);
+    _doctorController.dispose();
     _nameController.dispose();
     _mobileController.dispose();
     _placeController.dispose();
@@ -66,71 +76,57 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
     }
   }
 
-  String? _getUpiIdForMethod(String method) {
-    if (_selectedHospital == null) return null;
-    
-    switch (method) {
-      case 'googlepay':
-        return _selectedHospital!.googlePayUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'phonepe':
-        return _selectedHospital!.phonePeUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'paytm':
-        return _selectedHospital!.paytmUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'bhim':
-        return _selectedHospital!.bhimUpiId ?? _selectedHospital!.defaultUpiId;
-      default:
-        return _selectedHospital!.defaultUpiId;
+  void _onDoctorNameChanged() {
+    final doctorName = _doctorController.text.trim();
+    if (doctorName.isNotEmpty && _selectedDoctorId == null) {
+      _onDoctorSelected(doctorName);
+    } else if (doctorName.isEmpty) {
+      setState(() {
+        _selectedDoctorId = null;
+        _selectedDoctor = null;
+      });
     }
   }
 
-  Future<void> _openUpiApp(String method, String? upiId) async {
-    if (upiId == null || upiId.isEmpty) {
+  Future<void> _onDoctorSelected(String doctorName) async {
+    await _searchDoctorByName(doctorName);
+  }
+
+  Future<void> _searchDoctorByName(String doctorName) async {
+    try {
+      final doctors = await DoctorService.searchDoctors(
+        doctorName,
+        hospitalId: _selectedHospital?.id,
+      );
+      if (doctors.isNotEmpty) {
+        final doctor = doctors.firstWhere(
+          (d) => d['name']?.toString().toLowerCase() == doctorName.toLowerCase(),
+          orElse: () => doctors.first,
+        );
+        setState(() {
+          _selectedDoctor = doctor;
+          _selectedDoctorId = doctor['id'] as int?;
+        });
+      }
+    } catch (e) {
+      print('Error searching doctor: $e');
+    }
+  }
+
+  Future<void> _openCashfreeCheckout() async {
+    if (_paymentSessionId == null || _paymentSessionId!.isEmpty) {
       Fluttertoast.showToast(
-        msg: 'UPI ID not configured for this payment method',
+        msg: 'Payment session not ready. Please try again.',
         backgroundColor: AppColors.errorColor,
       );
       return;
     }
 
-    String upiUrl = '';
-    switch (method) {
-      case 'googlepay':
-        upiUrl = 'tez://upi/pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'phonepe':
-        upiUrl = 'phonepe://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'paytm':
-        upiUrl = 'paytmmp://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'bhim':
-        upiUrl = 'upi://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-    }
-
     try {
-      final uri = Uri.parse(upiUrl);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        // Fallback to generic UPI
-        final paymentAmount = PaymentService.calculateOperationFee(_selectedHospital!.id, null);
-        final encodedUpiId = Uri.encodeComponent(upiId);
-        final encodedHospitalName = Uri.encodeComponent(_selectedHospital!.name);
-        final encodedAmount = paymentAmount.toStringAsFixed(2);
-        final genericUri = Uri.parse('upi://pay?pa=$encodedUpiId&pn=$encodedHospitalName&am=$encodedAmount&cu=INR');
-        if (await canLaunchUrl(genericUri)) {
-          await launchUrl(genericUri, mode: LaunchMode.externalApplication);
-        } else {
-          Fluttertoast.showToast(
-            msg: 'Please install a UPI app to make payment',
-            backgroundColor: AppColors.errorColor,
-          );
-        }
-      }
+      await PaymentService.openCashfreeCheckout(_paymentSessionId!);
     } catch (e) {
       Fluttertoast.showToast(
-        msg: 'Error opening payment app',
+        msg: 'Unable to open payment gateway',
         backgroundColor: AppColors.errorColor,
       );
     }
@@ -141,9 +137,26 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
       return;
     }
 
-    if (_selectedHospital == null) {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    if (!authService.isAuthenticated) {
       Fluttertoast.showToast(
-        msg: 'Please select a hospital',
+        msg: 'Please login to book an operation',
+        backgroundColor: AppColors.errorColor,
+      );
+      return;
+    }
+
+    if (_selectedDoctorId == null) {
+      Fluttertoast.showToast(
+        msg: 'Please select a doctor',
+        backgroundColor: AppColors.errorColor,
+      );
+      return;
+    }
+
+    if (_selectedSpecialty == null || _selectedSpecialty!.isEmpty) {
+      Fluttertoast.showToast(
+        msg: 'Please select a specialty',
         backgroundColor: AppColors.errorColor,
       );
       return;
@@ -154,35 +167,50 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
     });
 
     try {
-      // Calculate payment amount
-      final paymentAmount = PaymentService.calculateOperationFee(_selectedHospital!.id, null);
-      
-      // Create payment order
-      final paymentOrderResponse = await PaymentService.createPaymentOrder(
-        type: 'operation',
-        hospitalId: _selectedHospital!.id,
-        patientName: _nameController.text.trim(),
-        patientMobile: _mobileController.text.trim(),
-        amount: paymentAmount,
-        metadata: {
-          'operation_date': DateFormat('yyyy-MM-dd').format(_selectedDate),
-          'operation_time': '${_timeController.text.trim()} $_selectedAmPm',
-          'place': _placeController.text.trim(),
+      // Step 1: Create operation
+      final response = await ApiService.post(
+        '/api/operations/book',
+        {
+          'doctor_id': _selectedDoctorId,
+          'specialty': _selectedSpecialty,
+          'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
+          'notes': _placeController.text.trim().isNotEmpty
+              ? '${_placeController.text.trim()} ${_timeController.text.trim()} $_selectedAmPm'.trim()
+              : null,
         },
+        requiresAuth: true,
       );
 
-      if (paymentOrderResponse == null || paymentOrderResponse['order_id'] == null) {
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception('Failed to create operation: ${response.body}');
+      }
+
+      final operationResult = jsonDecode(response.body);
+      final operationId = operationResult['id'];
+
+      // Step 2: Create payment order
+      final paymentAmount = PaymentService.calculateOperationFee(_selectedHospital?.id ?? 0, _selectedSpecialty);
+      final paymentOrderResponse = await PaymentService.createPaymentOrder(
+        appointmentId: null,
+        operationId: operationId,
+        amount: paymentAmount,
+        authToken: authService.token,
+      );
+
+      if (paymentOrderResponse == null || paymentOrderResponse['payment_session_id'] == null) {
         throw Exception('Failed to create payment order. Please try again.');
       }
 
       setState(() {
-        _paymentOrderId = paymentOrderResponse['order_id'] as String;
+        _operationId = operationId as int?;
+        _paymentId = paymentOrderResponse['payment_id'] as int?;
+        _paymentSessionId = paymentOrderResponse['payment_session_id'] as String?;
         _showPaymentOptions = true;
         _isLoading = false;
       });
 
       Fluttertoast.showToast(
-        msg: 'Payment order created. Please complete payment.',
+        msg: 'Payment session created. Please complete payment.',
         backgroundColor: AppColors.infoColor,
       );
     } catch (e) {
@@ -196,18 +224,10 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
     }
   }
 
-  Future<void> _confirmPaymentAndBook() async {
-    if (_selectedPaymentMethod == null) {
+  Future<void> _confirmPayment() async {
+    if (_paymentId == null) {
       Fluttertoast.showToast(
-        msg: 'Please select a payment method',
-        backgroundColor: AppColors.errorColor,
-      );
-      return;
-    }
-
-    if (_paymentOrderId == null) {
-      Fluttertoast.showToast(
-        msg: 'Payment order not created. Please try again.',
+        msg: 'Payment not created. Please try again.',
         backgroundColor: AppColors.errorColor,
       );
       return;
@@ -218,95 +238,34 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
     });
 
     try {
-      // First, verify payment status
-      final paymentStatus = await PaymentService.getPaymentStatus(_paymentOrderId!);
-      
-      if (paymentStatus == null) {
-        throw Exception('Could not verify payment status. Please try again.');
-      }
-
-      // For UPI payments, we'll mark as paid if order exists (manual verification)
-      final paymentStatusValue = paymentStatus['status'] as String? ?? paymentStatus['status'];
-      final isPaid = paymentStatusValue == 'paid' || 
-                     paymentStatusValue == 'completed' ||
-                     (_paymentOrderId!.startsWith('UPI_') && paymentStatusValue == 'created');
-
-      if (!isPaid) {
-        // Show dialog to confirm payment completion
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Payment Confirmation'),
-            content: const Text(
-              'Please confirm that you have completed the payment. '
-              'If payment is not completed, the booking will be cancelled.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Payment Completed'),
-              ),
-            ],
-          ),
-        );
-
-        if (confirmed != true) {
-          setState(() {
-            _isLoading = false;
-          });
-          return;
-        }
-      }
-
-      final timeString = '${_timeController.text.trim()} $_selectedAmPm';
-      final response = await ApiService.post(
-        '/api/operations/book',
-        {
-          'patient_name': _nameController.text.trim(),
-          'patient_mobile': _mobileController.text.trim(),
-          'place': _placeController.text.trim(),
-          'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
-          'time': timeString,
-          'hospital_id': _selectedHospital!.id,
-          'order_id': _paymentOrderId, // Include payment order ID
-          'payment_method': _selectedPaymentMethod,
-        },
+      final authService = Provider.of<AuthService>(context, listen: false);
+      final verified = await PaymentService.verifyPayment(
+        _paymentId!,
+        authToken: authService.token,
       );
 
       setState(() {
         _isLoading = false;
       });
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (verified) {
         Fluttertoast.showToast(
-          msg: 'Operation booked successfully!',
+          msg: 'Payment verified successfully!',
           backgroundColor: AppColors.successColor,
         );
         Navigator.pop(context);
       } else {
-        try {
-          final error = jsonDecode(response.body);
-          Fluttertoast.showToast(
-            msg: error['detail'] ?? 'Failed to book operation',
-            backgroundColor: AppColors.errorColor,
-          );
-        } catch (e) {
-          Fluttertoast.showToast(
-            msg: 'Failed to book operation',
-            backgroundColor: AppColors.errorColor,
-          );
-        }
+        Fluttertoast.showToast(
+          msg: 'Payment is still pending. Please try again later.',
+          backgroundColor: AppColors.warningColor,
+        );
       }
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
       Fluttertoast.showToast(
-        msg: 'Error booking operation: ${e.toString()}',
+        msg: 'Error verifying payment: ${e.toString()}',
         backgroundColor: AppColors.errorColor,
       );
     }
@@ -355,6 +314,47 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
                   }
                   if (value.length != 10) {
                     return 'Please enter a valid 10-digit mobile number';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+
+              // Doctor Selection
+              DoctorAutocomplete(
+                controller: _doctorController,
+                labelText: 'Select Doctor *',
+                hintText: 'Start typing doctor name...',
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a doctor';
+                  }
+                  return null;
+                },
+                hospitalId: _selectedHospital?.id,
+              ),
+              const SizedBox(height: 20),
+
+              // Specialty Selection
+              DropdownButtonFormField<String>(
+                value: _selectedSpecialty,
+                decoration: const InputDecoration(
+                  labelText: 'Select Specialty *',
+                  prefixIcon: Icon(Icons.medical_services),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'surgery', child: Text('Surgery')),
+                  DropdownMenuItem(value: 'ortho', child: Text('Orthopedics')),
+                  DropdownMenuItem(value: 'gyn', child: Text('Gynecology')),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    _selectedSpecialty = value;
+                  });
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a specialty';
                   }
                   return null;
                 },
@@ -472,7 +472,9 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
                         setState(() {
                           _selectedHospital = _hospitals.firstWhere((h) => h.id == value);
                           _showPaymentOptions = false;
-                          _selectedPaymentMethod = null;
+                          _doctorController.clear();
+                          _selectedDoctor = null;
+                          _selectedDoctorId = null;
                         });
                       },
                 validator: (value) {
@@ -496,144 +498,32 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
               const SizedBox(height: 30),
 
               // Payment Options Section
-              if (_showPaymentOptions && _selectedHospital != null) ...[
+              if (_showPaymentOptions) ...[
                 const Divider(),
                 const SizedBox(height: 20),
                 const Text(
-                  'Payment Options - Doctor Fee',
+                  'Payment - Cashfree',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: AppColors.textDark,
                   ),
                 ),
-                const SizedBox(height: 20),
-
-                // Payment Method Selection
+                const SizedBox(height: 10),
                 const Text(
-                  'Select Payment Method *',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                  'Tap below to open the payment gateway.',
+                  style: TextStyle(color: AppColors.textLight),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: _openCashfreeCheckout,
+                  icon: const Icon(Icons.payment),
+                  label: const Text('Open Payment Gateway'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryColor,
                   ),
                 ),
-                const SizedBox(height: 10),
-
-                // Google Pay
-                if (_selectedHospital!.googlePayUpiId != null || _selectedHospital!.defaultUpiId != null)
-                  _buildPaymentOption(
-                    'Google Pay',
-                    '📱',
-                    'googlepay',
-                    _getUpiIdForMethod('googlepay') ?? '',
-                  ),
-
-                // PhonePe
-                if (_selectedHospital!.phonePeUpiId != null || _selectedHospital!.defaultUpiId != null)
-                  _buildPaymentOption(
-                    'PhonePe',
-                    '💳',
-                    'phonepe',
-                    _getUpiIdForMethod('phonepe') ?? '',
-                  ),
-
-                // Paytm
-                if (_selectedHospital!.paytmUpiId != null || _selectedHospital!.defaultUpiId != null)
-                  _buildPaymentOption(
-                    'Paytm',
-                    '💵',
-                    'paytm',
-                    _getUpiIdForMethod('paytm') ?? '',
-                  ),
-
-                // BHIM UPI
-                if (_selectedHospital!.bhimUpiId != null || _selectedHospital!.defaultUpiId != null)
-                  _buildPaymentOption(
-                    'BHIM UPI',
-                    '🏦',
-                    'bhim',
-                    _getUpiIdForMethod('bhim') ?? '',
-                  ),
-
                 const SizedBox(height: 20),
-
-                // QR Code Display
-                if (_selectedPaymentMethod != null)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Scan QR Code to Pay',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          Builder(
-                            builder: (context) {
-                              final upiId = _getUpiIdForMethod(_selectedPaymentMethod!);
-                              if (upiId == null || upiId.isEmpty) {
-                                return const Text('UPI ID not available');
-                              }
-                              
-                              final paymentAmount = PaymentService.calculateOperationFee(_selectedHospital!.id, null);
-                              final encodedUpiId = Uri.encodeComponent(upiId);
-                              final encodedHospitalName = Uri.encodeComponent(_selectedHospital!.name);
-                              final encodedAmount = paymentAmount.toStringAsFixed(2);
-                              final upiPaymentString = 'upi://pay?pa=$encodedUpiId&pn=$encodedHospitalName&am=$encodedAmount&cu=INR';
-                              
-                              if (_selectedHospital!.paymentQrCode != null && 
-                                  _selectedHospital!.paymentQrCode!.isNotEmpty &&
-                                  _selectedHospital!.paymentQrCode!.startsWith('http')) {
-                                return Image.network(
-                                  _selectedHospital!.paymentQrCode!,
-                                  width: 250,
-                                  height: 250,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return QrImageView(
-                                      data: upiPaymentString,
-                                      version: QrVersions.auto,
-                                      size: 250,
-                                    );
-                                  },
-                                );
-                              } else {
-                                return QrImageView(
-                                  data: upiPaymentString,
-                                  version: QrVersions.auto,
-                                  size: 250,
-                                );
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                          Text(
-                            _getUpiIdForMethod(_selectedPaymentMethod!) ?? '',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          ElevatedButton.icon(
-                            onPressed: () => _openUpiApp(_selectedPaymentMethod!, _getUpiIdForMethod(_selectedPaymentMethod!)),
-                            icon: const Icon(Icons.payment),
-                            label: const Text('Open Payment App'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primaryColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                const SizedBox(height: 20),
-
-                // Refund Policy Note
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -669,7 +559,6 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 30),
               ],
 
@@ -681,7 +570,7 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
                   onPressed: _isLoading
                       ? null
                       : _showPaymentOptions
-                          ? _confirmPaymentAndBook
+                          ? _confirmPayment
                           : _proceedToPayment,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryColor,
@@ -692,7 +581,7 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
                       : Text(
-                          _showPaymentOptions ? 'Confirm Payment & Book Operation' : 'Proceed to Payment',
+                          _showPaymentOptions ? 'I Have Completed Payment' : 'Proceed to Payment',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -704,33 +593,6 @@ class _BookOperationScreenState extends State<BookOperationScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildPaymentOption(String name, String emoji, String method, String upiId) {
-    final isSelected = _selectedPaymentMethod == method;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      color: isSelected ? AppColors.primaryColor.withOpacity(0.1) : null,
-      child: ListTile(
-        leading: Text(emoji, style: const TextStyle(fontSize: 24)),
-        title: Text(name),
-        subtitle: upiId.isNotEmpty ? Text(upiId, style: const TextStyle(fontSize: 12)) : null,
-        trailing: Radio<String>(
-          value: method,
-          groupValue: _selectedPaymentMethod,
-          onChanged: (value) {
-            setState(() {
-              _selectedPaymentMethod = value;
-            });
-          },
-        ),
-        onTap: () {
-          setState(() {
-            _selectedPaymentMethod = method;
-          });
-        },
       ),
     );
   }

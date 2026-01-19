@@ -6,7 +6,14 @@ import '../utils/app_colors.dart';
 
 class AddDoctorDialog extends StatefulWidget {
   final String doctorName;
-  final Function(String doctorName, String? place, String? mobile, String? email, String? degree, String? specialization) onAdd;
+  final Function(
+    String doctorName,
+    String? mobile,
+    String? email,
+    String? degree,
+    String? specialization,
+    String? instituteName,
+  ) onAdd;
 
   const AddDoctorDialog({
     super.key,
@@ -21,11 +28,11 @@ class AddDoctorDialog extends StatefulWidget {
 class _AddDoctorDialogState extends State<AddDoctorDialog> {
   final _formKey = GlobalKey<FormState>();
   final _doctorNameController = TextEditingController();
-  final _placeController = TextEditingController();
   final _mobileController = TextEditingController();
   final _emailController = TextEditingController();
   final _degreeController = TextEditingController();
   final _specializationController = TextEditingController();
+  final _instituteController = TextEditingController();
   bool _isLoading = false;
 
   @override
@@ -37,11 +44,11 @@ class _AddDoctorDialogState extends State<AddDoctorDialog> {
   @override
   void dispose() {
     _doctorNameController.dispose();
-    _placeController.dispose();
     _mobileController.dispose();
     _emailController.dispose();
     _degreeController.dispose();
     _specializationController.dispose();
+    _instituteController.dispose();
     super.dispose();
   }
 
@@ -57,11 +64,11 @@ class _AddDoctorDialogState extends State<AddDoctorDialog> {
     try {
       await widget.onAdd(
         _doctorNameController.text.trim(),
-        _placeController.text.trim().isEmpty ? null : _placeController.text.trim(),
         _mobileController.text.trim().isEmpty ? null : _mobileController.text.trim(),
         _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
         _degreeController.text.trim().isEmpty ? null : _degreeController.text.trim(),
         _specializationController.text.trim().isEmpty ? null : _specializationController.text.trim(),
+        _instituteController.text.trim().isEmpty ? null : _instituteController.text.trim(),
       );
 
       if (mounted) {
@@ -112,21 +119,22 @@ class _AddDoctorDialogState extends State<AddDoctorDialog> {
               ),
               const SizedBox(height: 16),
               TextFormField(
-                controller: _placeController,
-                decoration: const InputDecoration(
-                  labelText: 'Place/City (Optional)',
-                  prefixIcon: Icon(Icons.location_city),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
                 controller: _mobileController,
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(
-                  labelText: 'Mobile (Optional)',
+                  labelText: 'Mobile *',
                   prefixIcon: Icon(Icons.phone),
                 ),
                 maxLength: 10,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Mobile number is required';
+                  }
+                  if (value.length != 10) {
+                    return 'Please enter a valid 10-digit mobile number';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -141,9 +149,29 @@ class _AddDoctorDialogState extends State<AddDoctorDialog> {
               TextFormField(
                 controller: _degreeController,
                 decoration: const InputDecoration(
-                  labelText: 'Degree/Qualification (Optional)',
+                  labelText: 'Degree/Qualification *',
                   prefixIcon: Icon(Icons.school),
                 ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Degree is required';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _instituteController,
+                decoration: const InputDecoration(
+                  labelText: 'Institute Name *',
+                  prefixIcon: Icon(Icons.apartment),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Institute name is required';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -339,16 +367,19 @@ class _DoctorAutocompleteState extends State<DoctorAutocomplete> {
       context: context,
       builder: (context) => AddDoctorDialog(
         doctorName: widget.controller.text.trim(),
-        onAdd: (doctorName, place, mobile, email, degree, specialization) async {
+        onAdd: (doctorName, mobile, email, degree, specialization, instituteName) async {
           try {
+            if (widget.hospitalId == null) {
+              throw Exception('Please select a hospital before adding a doctor');
+            }
             final response = await DoctorService.addNewDoctor(
               doctorName: doctorName,
-              place: place,
-              mobile: mobile,
+              mobile: mobile ?? '',
               email: email,
-              degree: degree,
+              degree: degree ?? '',
               specialization: specialization,
-              hospitalId: widget.hospitalId,
+              instituteName: instituteName ?? '',
+              hospitalId: widget.hospitalId!,
             );
             
             widget.controller.text = doctorName;

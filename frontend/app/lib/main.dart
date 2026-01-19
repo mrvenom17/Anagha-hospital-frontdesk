@@ -26,7 +26,7 @@ class AnaghaHospitalApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => AuthService(),
       child: MaterialApp(
-        title: 'Anagha Hospital Solutions',
+        title: 'Anagha Health Connect',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           primarySwatch: Colors.blue,

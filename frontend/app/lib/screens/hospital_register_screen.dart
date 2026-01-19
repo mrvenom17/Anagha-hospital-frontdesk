@@ -12,13 +12,15 @@ import '../widgets/city_autocomplete.dart';
 import 'package_selection_screen.dart';
 
 class HospitalRegisterScreen extends StatefulWidget {
-  final String? initialPaymentOrderId;
+  final int? initialPaymentId;
+  final String? initialPaymentSessionId;
   final String? selectedPackage;
   final String? selectedBillingPeriod;
 
   const HospitalRegisterScreen({
     super.key,
-    this.initialPaymentOrderId,
+    this.initialPaymentId,
+    this.initialPaymentSessionId,
     this.selectedPackage,
     this.selectedBillingPeriod,
   });
@@ -47,7 +49,8 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
   bool _whatsappEnabled = false;
   bool _isLoading = false;
   bool _showPaymentOptions = false;
-  String? _paymentOrderId;
+  int? _paymentId;
+  String? _paymentSessionId;
   String? _selectedPackage;
   String? _selectedBillingPeriod;
 
@@ -55,9 +58,12 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
   void initState() {
     super.initState();
     // Initialize with provided values if available
-    if (widget.initialPaymentOrderId != null) {
-      _paymentOrderId = widget.initialPaymentOrderId;
+    if (widget.initialPaymentId != null) {
+      _paymentId = widget.initialPaymentId;
       _showPaymentOptions = true;
+    }
+    if (widget.initialPaymentSessionId != null) {
+      _paymentSessionId = widget.initialPaymentSessionId;
     }
     if (widget.selectedPackage != null) {
       _selectedPackage = widget.selectedPackage;
@@ -96,31 +102,23 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
     });
 
     try {
-      // Create payment order for hospital registration (₹5,000)
+      // Create payment order for hospital registration
       final paymentAmount = 5000.0;
-      final paymentOrderResponse = await PaymentService.createPaymentOrder(
-        type: 'hospital_registration',
-        hospitalId: 0, // Will be set after registration
-        patientName: _nameController.text.trim(),
-        patientMobile: _mobileController.text.trim(),
+      final paymentOrderResponse = await PaymentService.createHospitalRegistrationOrder(
+        planName: _selectedPackage ?? 'Hospital Registration',
         amount: paymentAmount,
-        metadata: {
-          'hospital_name': _nameController.text.trim(),
-          'hospital_email': _emailController.text.trim(),
-        },
+        customerName: _nameController.text.trim(),
+        customerPhone: _mobileController.text.trim(),
+        customerEmail: _emailController.text.trim(),
       );
 
-      if (paymentOrderResponse == null) {
+      if (paymentOrderResponse == null || paymentOrderResponse['payment_session_id'] == null) {
         throw Exception('Failed to create payment order');
       }
 
-      final orderId = paymentOrderResponse['order_id'];
-      if (orderId == null) {
-        throw Exception('Failed to create payment order - no order ID returned');
-      }
-
       setState(() {
-        _paymentOrderId = orderId;
+        _paymentId = paymentOrderResponse['payment_id'] as int?;
+        _paymentSessionId = paymentOrderResponse['payment_session_id'] as String?;
         _showPaymentOptions = true;
         _isLoading = false;
       });
@@ -140,72 +138,20 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
     }
   }
 
-  String? _getUpiIdForMethod(String method) {
-    // For hospital registration, we need a default UPI ID
-    // In production, this should come from admin/system settings
-    // For now, use the hospital's own UPI ID if provided
-    switch (method) {
-      case 'googlepay':
-        return _googlePayUpiController.text.trim().isEmpty 
-            ? null 
-            : _googlePayUpiController.text.trim();
-      case 'phonepe':
-        return _phonePeUpiController.text.trim().isEmpty 
-            ? null 
-            : _phonePeUpiController.text.trim();
-      case 'paytm':
-        return _paytmUpiController.text.trim().isEmpty 
-            ? null 
-            : _paytmUpiController.text.trim();
-      case 'bhim':
-        return _bhimUpiController.text.trim().isEmpty 
-            ? null 
-            : _bhimUpiController.text.trim();
-      default:
-        return _defaultUpiController.text.trim().isEmpty 
-            ? null 
-            : _defaultUpiController.text.trim();
-    }
-  }
-
-  Future<void> _openUpiApp(String method, String? upiId) async {
-    if (upiId == null || upiId.isEmpty) {
+  Future<void> _openCashfreeCheckout() async {
+    if (_paymentSessionId == null || _paymentSessionId!.isEmpty) {
       Fluttertoast.showToast(
-        msg: 'Please enter UPI ID for $method in the form above',
+        msg: 'Payment session not ready. Please try again.',
         backgroundColor: AppColors.errorColor,
       );
       return;
     }
 
-    String upiUrl = '';
-    switch (method) {
-      case 'googlepay':
-        upiUrl = 'tez://upi/pay?pa=$upiId&pn=${_nameController.text.trim()}&am=5000&cu=INR';
-        break;
-      case 'phonepe':
-        upiUrl = 'phonepe://pay?pa=$upiId&pn=${_nameController.text.trim()}&am=5000&cu=INR';
-        break;
-      case 'paytm':
-        upiUrl = 'paytmmp://pay?pa=$upiId&pn=${_nameController.text.trim()}&am=5000&cu=INR';
-        break;
-      case 'bhim':
-        upiUrl = 'upi://pay?pa=$upiId&pn=${_nameController.text.trim()}&am=5000&cu=INR';
-        break;
-    }
-
     try {
-      final uri = Uri.parse(upiUrl);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        Fluttertoast.showToast(
-          msg: 'Payment app not installed',
-          backgroundColor: AppColors.errorColor,
-        );
-      }
+      await PaymentService.openCashfreeCheckout(_paymentSessionId!);
     } catch (e) {
       Fluttertoast.showToast(
-        msg: 'Error opening payment app: $e',
+        msg: 'Unable to open payment gateway',
         backgroundColor: AppColors.errorColor,
       );
     }
@@ -213,7 +159,7 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
 
   Future<void> _submitRegistration() async {
     // Payment is mandatory - check if payment was completed
-    if (_paymentOrderId == null) {
+    if (_paymentId == null) {
       Fluttertoast.showToast(
         msg: 'Please complete payment first',
         backgroundColor: AppColors.errorColor,
@@ -257,13 +203,13 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
           ? null
           : _pincodeController.text.trim(),
       'whatsapp_enabled': _whatsappEnabled,
-      'default_upi_id': _defaultUpiController.text.trim().isEmpty
+      'upi_id': _defaultUpiController.text.trim().isEmpty
           ? null
           : _defaultUpiController.text.trim(),
-      'google_pay_upi_id': _googlePayUpiController.text.trim().isEmpty
+      'gpay_upi_id': _googlePayUpiController.text.trim().isEmpty
           ? null
           : _googlePayUpiController.text.trim(),
-      'phonepe_upi_id': _phonePeUpiController.text.trim().isEmpty
+      'phonepay_upi_id': _phonePeUpiController.text.trim().isEmpty
           ? null
           : _phonePeUpiController.text.trim(),
       'paytm_upi_id': _paytmUpiController.text.trim().isEmpty
@@ -272,7 +218,7 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
       'bhim_upi_id': _bhimUpiController.text.trim().isEmpty
           ? null
           : _bhimUpiController.text.trim(),
-      'payment_order_id': _paymentOrderId, // Include payment order ID
+      'payment_id': _paymentId, // Include payment ID
     };
 
     // Always include the generated ID in the data sent to API
@@ -1218,14 +1164,14 @@ Thank you!
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 20),
-                          // Payment Methods
-                          _buildPaymentOption('Google Pay', 'googlepay', Icons.account_balance_wallet, Colors.blue),
-                          const SizedBox(height: 15),
-                          _buildPaymentOption('PhonePe', 'phonepe', Icons.phone_android, Colors.purple),
-                          const SizedBox(height: 15),
-                          _buildPaymentOption('Paytm', 'paytm', Icons.payment, Colors.blue),
-                          const SizedBox(height: 15),
-                          _buildPaymentOption('BHIM UPI', 'bhim', Icons.qr_code, Colors.green),
+                          ElevatedButton.icon(
+                            onPressed: _openCashfreeCheckout,
+                            icon: const Icon(Icons.payment),
+                            label: const Text('Open Payment Gateway'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryColor,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1275,9 +1221,9 @@ Thank you!
                           'pincode': _pincodeController.text.trim(),
                           'whatsapp_enabled': _whatsappEnabled,
                           'whatsapp_number': _whatsappEnabled ? _mobileController.text.trim() : null,
-                          'default_upi_id': _defaultUpiController.text.trim().isEmpty ? null : _defaultUpiController.text.trim(),
-                          'google_pay_upi_id': _googlePayUpiController.text.trim().isEmpty ? null : _googlePayUpiController.text.trim(),
-                          'phonepe_upi_id': _phonePeUpiController.text.trim().isEmpty ? null : _phonePeUpiController.text.trim(),
+                          'upi_id': _defaultUpiController.text.trim().isEmpty ? null : _defaultUpiController.text.trim(),
+                          'gpay_upi_id': _googlePayUpiController.text.trim().isEmpty ? null : _googlePayUpiController.text.trim(),
+                          'phonepay_upi_id': _phonePeUpiController.text.trim().isEmpty ? null : _phonePeUpiController.text.trim(),
                           'paytm_upi_id': _paytmUpiController.text.trim().isEmpty ? null : _paytmUpiController.text.trim(),
                           'bhim_upi_id': _bhimUpiController.text.trim().isEmpty ? null : _bhimUpiController.text.trim(),
                         };
@@ -1328,67 +1274,5 @@ Thank you!
     );
   }
 
-  Widget _buildPaymentOption(String title, String method, IconData icon, Color color) {
-    final upiId = _getUpiIdForMethod(method);
-    final hasUpiId = upiId != null && upiId.isNotEmpty;
-
-    return Card(
-      elevation: 2,
-      child: InkWell(
-        onTap: hasUpiId ? () => _openUpiApp(method, upiId) : null,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (hasUpiId)
-                      Text(
-                        upiId!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textLight,
-                        ),
-                      )
-                    else
-                      const Text(
-                        'Please enter UPI ID above',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.errorColor,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (hasUpiId)
-                const Icon(Icons.arrow_forward_ios, size: 16)
-              else
-                const Icon(Icons.block, color: AppColors.errorColor),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 

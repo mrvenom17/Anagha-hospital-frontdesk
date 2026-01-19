@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Heart, User, Phone, Calendar, Clock, MapPin, Building2, FileText, ArrowRight, Briefcase, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
+import { hospitalsAPI, doctorsAPI, appointmentsAPI } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 
 const bookingSchema = z.object({
   representativeName: z.string().trim().min(2, { message: "Name is required" }),
@@ -24,22 +26,6 @@ const bookingSchema = z.object({
 });
 
 type FormErrors = Partial<Record<keyof z.infer<typeof bookingSchema>, string>>;
-
-const doctors = [
-  { name: "Dr. Rahul Sharma", specialty: "General Medicine" },
-  { name: "Dr. Priya Patel", specialty: "Cardiology" },
-  { name: "Dr. Amit Kumar", specialty: "Orthopedics" },
-  { name: "Dr. Sneha Gupta", specialty: "Neurology" },
-  { name: "Dr. Vikram Singh", specialty: "Dermatology" },
-];
-
-const hospitals = [
-  "Anagha City Hospital",
-  "Central Medical Center",
-  "Apollo Healthcare",
-  "Max Super Specialty",
-  "Fortis Hospital",
-];
 
 const purposes = [
   "Product Presentation",
@@ -67,7 +53,34 @@ const PharmaBookAppointment = () => {
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [hospitals, setHospitals] = useState<any[]>([]);
+  const [doctors, setDoctors] = useState<any[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [hospitalsData, doctorsData] = await Promise.all([
+          hospitalsAPI.getApproved(),
+          doctorsAPI.getAll(),
+        ]);
+        setHospitals(hospitalsData || []);
+        setDoctors(doctorsData || []);
+      } catch (error) {
+        console.error("Error fetching data:", error);
+        toast({
+          title: "Error",
+          description: "Failed to load hospitals and doctors. Please refresh the page.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoadingData(false);
+      }
+    };
+    fetchData();
+  }, [toast]);
 
   const handleChange = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setFormData((prev) => ({ ...prev, [field]: e.target.value }));
@@ -94,14 +107,73 @@ const PharmaBookAppointment = () => {
 
     setIsLoading(true);
     
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      const currentUser = await getCurrentUser();
+      if (!currentUser) {
+        toast({
+          title: "Authentication Required",
+          description: "Please login to book an appointment.",
+          variant: "destructive",
+        });
+        navigate("/login");
+        return;
+      }
+
+      const selectedHospital = hospitals.find(h => h.name === formData.hospital || h.id.toString() === formData.hospital);
+      const selectedDoctor = doctors.find(d => d.name === formData.doctor || d.id.toString() === formData.doctor);
+      
+      if (!selectedHospital || !selectedDoctor) {
+        throw new Error("Please select valid hospital and doctor");
+      }
+
+      // Convert time to time_slot format (HH:MM)
+      const timeSlot = formData.time.includes(":") ? formData.time.substring(0, 5) : formData.time;
+
+      // Build reason/notes from products and purpose
+      const productsList = [formData.product1, formData.product2, formData.product3, formData.product4]
+        .filter(p => p && p.trim())
+        .join(", ");
+      const reason = `Purpose: ${formData.purpose}${productsList ? ` | Products: ${productsList}` : ""}${formData.notes ? ` | Notes: ${formData.notes}` : ""}`;
+
+      // Book appointment
+      await appointmentsAPI.book({
+        doctor_id: selectedDoctor.id,
+        date: formData.date,
+        time_slot: timeSlot,
+        reason: reason,
+      });
+
       toast({
         title: "Appointment Requested!",
-        description: `Your meeting request has been sent for ${formData.date} at ${formData.time}. You will receive confirmation once the doctor approves.`,
+        description: `Your meeting request has been sent for ${formData.date} at ${timeSlot}. You will receive confirmation once the doctor approves.`,
       });
-    }, 1500);
+      
+      // Redirect to dashboard after a short delay
+      setTimeout(() => {
+        navigate("/pharma-dashboard");
+      }, 2000);
+    } catch (error: any) {
+      console.error("Booking error:", error);
+      toast({
+        title: "Booking Failed",
+        description: error.message || "Failed to book appointment. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  if (loadingData) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading hospitals and doctors...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -303,10 +375,11 @@ const PharmaBookAppointment = () => {
                   value={formData.doctor}
                   onChange={handleChange("doctor")}
                   className={`w-full h-12 rounded-md border bg-background px-3 text-foreground ${errors.doctor ? "border-destructive" : "border-input"}`}
+                  disabled={loadingData}
                 >
                   <option value="">Select doctor</option>
                   {doctors.map((d) => (
-                    <option key={d.name} value={d.name}>{d.name} - {d.specialty}</option>
+                    <option key={d.id} value={d.id}>{d.name} {d.degree ? `- ${d.degree}` : ''}</option>
                   ))}
                 </select>
                 {errors.doctor && <p className="text-sm text-destructive">{errors.doctor}</p>}
@@ -324,10 +397,11 @@ const PharmaBookAppointment = () => {
                     value={formData.hospital}
                     onChange={handleChange("hospital")}
                     className={`w-full h-12 rounded-md border bg-background pl-10 pr-3 text-foreground ${errors.hospital ? "border-destructive" : "border-input"}`}
+                    disabled={loadingData}
                   >
                     <option value="">Select hospital</option>
                     {hospitals.map((h) => (
-                      <option key={h} value={h}>{h}</option>
+                      <option key={h.id} value={h.id}>{h.name}</option>
                     ))}
                   </select>
                 </div>

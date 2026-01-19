@@ -2,53 +2,52 @@
   "plans": [
     {
       "name": "Starter",
-      "price": "999",
-      "period": "month",
-      "description": "Perfect for small clinics",
+      "description": "For 1 Doctor / 1 Hospital",
+      "installationPrice": 1,
+      "monthlyPrice": 1,
       "features": [
-        "Up to 5 doctors",
-        "Unlimited appointments",
-        "Basic scheduling",
-        "Email support",
-        "Mobile app access"
+        "1 Doctor profile",
+        "1 Hospital",
+        "Appointment management",
+        "Email reminders",
+        "Basic analytics",
+        "Email support"
       ],
       "popular": false
     },
     {
       "name": "Professional",
-      "price": "2499",
-      "period": "month",
-      "description": "Ideal for growing practices",
+      "description": "For 5 Doctors in 1 Hospital",
+      "installationPrice": 5,
+      "monthlyPrice": 5,
       "features": [
-        "Up to 20 doctors",
-        "Unlimited appointments",
-        "Advanced scheduling",
-        "Operation management",
-        "Priority support",
-        "Custom branding",
-        "Analytics dashboard"
+        "Up to 5 Doctor profiles",
+        "1 Hospital",
+        "SMS & Email reminders",
+        "Advanced analytics",
+        "Custom booking page",
+        "Payment integration",
+        "Priority support"
       ],
       "popular": true
     },
     {
       "name": "Enterprise",
-      "price": "4999",
-      "period": "month",
-      "description": "For large hospitals",
+      "description": "For 10 Doctors & 5 Hospitals",
+      "installationPrice": 10,
+      "monthlyPrice": 10,
       "features": [
-        "Unlimited doctors",
-        "Unlimited appointments",
-        "Full operation management",
+        "Up to 10 Doctor profiles",
+        "Up to 5 Hospitals (same ownership)",
         "Multi-location support",
-        "24/7 priority support",
         "Custom integrations",
-        "Advanced analytics",
-        "Dedicated account manager"
+        "Dedicated account manager",
+        "24/7 phone support",
+        "White-label option"
       ],
       "popular": false
     }
   ],
-  "annual_discount": 20,
   "currency": "INR",
   "currency_symbol": "₹"
 }

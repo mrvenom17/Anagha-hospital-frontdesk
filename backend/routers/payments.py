@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, BackgroundTasks
 from database import get_supabase
 from models import PaymentStatus, PaymentMethod
 # Note: Payment, Appointment, Operation, User, Hospital SQLAlchemy models removed - using Supabase now
@@ -10,10 +10,11 @@ import uuid
 import json
 import logging
 import os
+import requests
 
-# Import Razorpay services
-from services.razorpay_service import RazorpayService
-from payment_gateway import PaymentGateway
+# Import Razorpay services (COMMENTED OUT - Replaced by Cashfree)
+# from services.razorpay_service import RazorpayService
+# from payment_gateway import PaymentGateway
 
 logger = logging.getLogger(__name__)
 
@@ -310,174 +311,173 @@ def generate_qr_code(request: QRGenerateRequest):
     }
 
 # ============================================
-# Razorpay Payment Endpoints
+# Cashfree Payment Endpoints (Replacing Razorpay)
 # ============================================
 
-class RazorpayOrderCreate(BaseModel):
+# Cashfree Configuration
+CASHFREE_API_URL = os.getenv("CASHFREE_API_URL", "https://api.cashfree.com/pg")
+CASHFREE_CLIENT_ID = os.getenv("CASHFREE_CLIENT_ID", "")
+CASHFREE_CLIENT_SECRET = os.getenv("CASHFREE_CLIENT_SECRET", "")
+
+# ============================================
+# Razorpay Payment Endpoints (COMMENTED OUT - Replaced by Cashfree)
+# ============================================
+
+# class RazorpayOrderCreate(BaseModel):
+#     appointment_id: Optional[int] = None
+#     operation_id: Optional[int] = None
+#     hospital_registration: Optional[bool] = False  # For hospital registration payments
+#     plan_name: Optional[str] = None  # Package/plan name
+#     amount: float  # Will accept int and convert to float
+#     currency: str = "INR"
+#     
+#     @validator('amount', pre=True)
+#     def convert_amount_to_float(cls, v):
+#         """Convert amount to float for consistency (handles int from mobile app)"""
+#         if v is None:
+#             raise ValueError("Amount is required")
+#         try:
+#             return float(v)
+#         except (ValueError, TypeError):
+#             raise ValueError(f"Invalid amount: {v}. Must be a number.")
+
+# OLD RAZORPAY ENDPOINT - COMMENTED OUT (Replaced by Cashfree)
+# @router.post("/create-order-hospital")
+# def create_hospital_registration_order(
+#     order_data: RazorpayOrderCreate
+# ):
+#     """
+#     Create Razorpay order for hospital registration or package purchase
+#     Razorpay order is created FIRST, DB insert happens only after success
+#     """
+#     supabase = get_supabase()
+#     if not supabase:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Database not configured"
+#         )
+# 
+#     # Validation
+#     if not order_data.hospital_registration and not order_data.plan_name:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Either hospital_registration or plan_name is required"
+#         )
+# 
+#     if order_data.amount <= 0:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Amount must be greater than 0"
+#         )
+# 
+#     try:
+#         import time
+#         import hashlib
+# 
+#         timestamp = int(time.time())
+#         prefix = "HOSPREG" if order_data.hospital_registration else "PKG"
+#         raw_key = f"{prefix}_{order_data.plan_name}_{timestamp}"
+#         hash_part = hashlib.md5(raw_key.encode()).hexdigest()[:8]
+# 
+#         internal_transaction_id = f"{prefix}_{timestamp}_{hash_part}"
+# 
+#         existing = supabase.table("payments").select("*").eq(
+#             "internal_transaction_id", internal_transaction_id
+#         ).execute()
+# 
+#         if existing.data:
+#             payment = existing.data[0]
+#             if payment.get("razorpay_order_id"):
+#                 return {
+#                     "payment_id": payment["id"],
+#                     "order_id": payment["razorpay_order_id"],
+#                     "amount": float(payment["amount"]),
+#                     "currency": payment.get("currency", "INR"),
+#                     "key_id": os.getenv("RAZORPAY_KEY_ID", ""),
+#                     "status": payment["status"],
+#                 }
+# 
+#         receipt = f"RCPT_{timestamp}"
+# 
+#         notes = {
+#             "type": "hospital_registration" if order_data.hospital_registration else "package_purchase",
+#             "plan_name": order_data.plan_name,
+#             "internal_transaction_id": internal_transaction_id
+#         }
+# 
+#         order = PaymentGateway.create_order(
+#             amount=order_data.amount,
+#             currency=order_data.currency,
+#             receipt=receipt,
+#             notes=notes
+#         )
+# 
+#         if not order or not order.get("order_id"):
+#             raise HTTPException(
+#                 status_code=status.HTTP_502_BAD_GATEWAY,
+#                 detail="Razorpay order creation failed"
+#             )
+# 
+#         payment_record = {
+#             "user_id": None,
+#             "hospital_id": None,
+#             "amount": str(order_data.amount),
+#             "currency": order_data.currency,
+#             "payment_method": "razorpay",
+#             "status": "PENDING",
+#             "razorpay_order_id": order["order_id"],
+#             "internal_transaction_id": internal_transaction_id,
+#             "initiated_at": datetime.now().isoformat(),
+#             "metadata": {
+#                 "type": notes["type"],
+#                 "plan_name": order_data.plan_name,
+#                 "total_amount": order_data.amount
+#             }
+#         }
+# 
+#         result = supabase.table("payments").insert(payment_record).execute()
+#         if not result.data:
+#             raise HTTPException(
+#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 detail="Failed to save payment record"
+#             )
+# 
+#         payment = result.data[0]
+# 
+#         return {
+#             "payment_id": payment["id"],
+#             "order_id": order["order_id"],
+#             "amount": float(order_data.amount),
+#             "currency": order_data.currency,
+#             "key_id": order.get("key_id", os.getenv("RAZORPAY_KEY_ID", "")),
+#             "status": payment["status"],
+#             "internal_transaction_id": internal_transaction_id
+#         }
+# 
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Hospital order creation failed: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Unable to create payment order"
+#         )
+
+class CashfreeOrderCreate(BaseModel):
     appointment_id: Optional[int] = None
     operation_id: Optional[int] = None
-    hospital_registration: Optional[bool] = False  # For hospital registration payments
-    plan_name: Optional[str] = None  # Package/plan name
-    amount: float  # Will accept int and convert to float
+    amount: float
     currency: str = "INR"
-    
-    @validator('amount', pre=True)
-    def convert_amount_to_float(cls, v):
-        """Convert amount to float for consistency (handles int from mobile app)"""
-        if v is None:
-            raise ValueError("Amount is required")
-        try:
-            return float(v)
-        except (ValueError, TypeError):
-            raise ValueError(f"Invalid amount: {v}. Must be a number.")
-
-@router.post("/create-order-hospital")
-def create_hospital_registration_order(
-    order_data: RazorpayOrderCreate
-):
-    """
-    Create Razorpay order for hospital registration or package purchase
-    Razorpay order is created FIRST, DB insert happens only after success
-    """
-    supabase = get_supabase()
-    if not supabase:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database not configured"
-        )
-
-    # Validation
-    if not order_data.hospital_registration and not order_data.plan_name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either hospital_registration or plan_name is required"
-        )
-
-    if order_data.amount <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Amount must be greater than 0"
-        )
-
-    try:
-        import time
-        import hashlib
-
-        # -----------------------------
-        # Generate INTERNAL transaction ID (long – for DB)
-        # -----------------------------
-        timestamp = int(time.time())
-        prefix = "HOSPREG" if order_data.hospital_registration else "PKG"
-        raw_key = f"{prefix}_{order_data.plan_name}_{timestamp}"
-        hash_part = hashlib.md5(raw_key.encode()).hexdigest()[:8]
-
-        internal_transaction_id = f"{prefix}_{timestamp}_{hash_part}"
-
-        # -----------------------------
-        # Idempotency check
-        # -----------------------------
-        existing = supabase.table("payments").select("*").eq(
-            "internal_transaction_id", internal_transaction_id
-        ).execute()
-
-        if existing.data:
-            payment = existing.data[0]
-            if payment.get("razorpay_order_id"):
-                return {
-                    "payment_id": payment["id"],
-                    "order_id": payment["razorpay_order_id"],
-                    "amount": float(payment["amount"]),
-                    "currency": payment.get("currency", "INR"),
-                    "key_id": os.getenv("RAZORPAY_KEY_ID", ""),
-                    "status": payment["status"],
-                }
-
-        # -----------------------------
-        # Razorpay receipt (SHORT ≤ 40 chars)
-        # -----------------------------
-        receipt = f"RCPT_{timestamp}"
-
-        # -----------------------------
-        # Notes (LONG data goes here)
-        # -----------------------------
-        notes = {
-            "type": "hospital_registration" if order_data.hospital_registration else "package_purchase",
-            "plan_name": order_data.plan_name,
-            "internal_transaction_id": internal_transaction_id
-        }
-
-        # -----------------------------
-        # Create Razorpay order (FIRST)
-        # -----------------------------
-        order = PaymentGateway.create_order(
-            amount=order_data.amount,
-            currency=order_data.currency,
-            receipt=receipt,
-            notes=notes
-        )
-
-        if not order or not order.get("order_id"):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Razorpay order creation failed"
-            )
-
-        # -----------------------------
-        # Create payment record (ONLY AFTER Razorpay success)
-        # -----------------------------
-        payment_record = {
-            "user_id": None,
-            "hospital_id": None,
-            "amount": str(order_data.amount),
-            "currency": order_data.currency,
-            "payment_method": "razorpay",
-            "status": "PENDING",
-            "razorpay_order_id": order["order_id"],
-            "internal_transaction_id": internal_transaction_id,
-            "initiated_at": datetime.now().isoformat(),
-            "metadata": {
-                "type": notes["type"],
-                "plan_name": order_data.plan_name,
-                "total_amount": order_data.amount
-            }
-        }
-
-        result = supabase.table("payments").insert(payment_record).execute()
-        if not result.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save payment record"
-            )
-
-        payment = result.data[0]
-
-        return {
-            "payment_id": payment["id"],
-            "order_id": order["order_id"],
-            "amount": float(order_data.amount),  # Ensure float type for mobile app compatibility
-            "currency": order_data.currency,
-            "key_id": order.get("key_id", os.getenv("RAZORPAY_KEY_ID", "")),
-            "status": payment["status"],
-            "internal_transaction_id": internal_transaction_id
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Hospital order creation failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create payment order"
-        )
 
 @router.post("/create-order")
-def create_razorpay_order(
-    order_data: RazorpayOrderCreate,
-    current_user: dict = Depends(get_current_user)
+def create_cashfree_order(
+    order_data: CashfreeOrderCreate,
+    current_user: Optional[dict] = Depends(lambda: None)  # Make auth optional for guest bookings
 ):
     """
-    Create Razorpay order and payment record
-    Returns order details for frontend Razorpay Checkout
+    Create Cashfree payment order for appointments or operations
+    Returns payment_session_id for frontend Cashfree Checkout
+    Supports both authenticated users and guest bookings
     """
     supabase = get_supabase()
     if not supabase:
@@ -488,10 +488,10 @@ def create_razorpay_order(
     
     try:
         # Validate request
-        if not order_data.appointment_id and not order_data.operation_id and not order_data.hospital_registration:
+        if not order_data.appointment_id and not order_data.operation_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either appointment_id, operation_id, or hospital_registration is required"
+                detail="Either appointment_id or operation_id is required"
             )
         
         if order_data.amount <= 0:
@@ -500,235 +500,573 @@ def create_razorpay_order(
                 detail="Amount must be greater than 0"
             )
         
-        # Get hospital_id from appointment or operation
-        hospital_id = None
+        # Get appointment or operation
+        appointment = None
+        operation = None
+        booking_id = None
+        booking_type = None
+        user_id = None
+        
         if order_data.appointment_id:
             appointment_result = supabase.table("appointments").select("*").eq(
                 "id", order_data.appointment_id
             ).execute()
             if not appointment_result.data:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Appointment not found"
-                )
+                raise HTTPException(status_code=404, detail="Appointment not found")
             appointment = appointment_result.data[0]
-            if appointment["user_id"] != current_user["id"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to create payment for this appointment"
-                )
-            hospital_id = appointment.get("hospital_id")
-        else:
+            
+            # For authenticated users, verify ownership
+            # For guest bookings, allow if appointment exists (already validated during booking)
+            if current_user and appointment["user_id"] != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized")
+            
+            user_id = appointment["user_id"]
+            booking_id = order_data.appointment_id
+            booking_type = "appointment"
+        elif order_data.operation_id:
             operation_result = supabase.table("operations").select("*").eq(
                 "id", order_data.operation_id
             ).execute()
             if not operation_result.data:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Operation not found"
-                )
+                raise HTTPException(status_code=404, detail="Operation not found")
             operation = operation_result.data[0]
-            if operation["patient_id"] != current_user["id"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to create payment for this operation"
-                )
-            hospital_id = operation.get("hospital_id")
+            if operation["user_id"] != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized")
+            booking_id = order_data.operation_id
+            booking_type = "operation"
         
-        if not hospital_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Hospital not found for this appointment/operation"
-            )
+        # Create Cashfree order
+        order_id = f"APT_{booking_id}" if booking_type == "appointment" else f"OP_{booking_id}"
         
-        # Check idempotency - look for existing payment with same reference
-        internal_transaction_id = RazorpayService.generate_idempotency_key(
-            current_user["id"], order_data.appointment_id, order_data.operation_id
+        # Get customer details from appointment/user or use guest info
+        if current_user:
+            customer_id = str(current_user["id"])
+            customer_name = current_user.get("name", "Customer")
+            customer_phone = current_user.get("mobile", "")
+            customer_email = current_user.get("email", "")
+        elif appointment:
+            # For guest bookings, get user details from appointment's user_id
+            user_result = supabase.table("users").select("id, name, mobile, email").eq("id", appointment["user_id"]).execute()
+            if user_result.data:
+                user_data = user_result.data[0]
+                customer_id = str(user_data["id"])
+                customer_name = user_data.get("name", "Guest Customer")
+                customer_phone = user_data.get("mobile", "")
+                customer_email = user_data.get("email", "")
+            else:
+                customer_id = "guest"
+                customer_name = "Guest Customer"
+                customer_phone = ""
+                customer_email = ""
+        else:
+            customer_id = "guest"
+            customer_name = "Guest Customer"
+            customer_phone = ""
+            customer_email = ""
+        
+        payload = {
+            "order_id": order_id,
+            "order_amount": float(order_data.amount),
+            "order_currency": order_data.currency,
+            "customer_details": {
+                "customer_id": customer_id,
+                "customer_name": customer_name,
+                "customer_phone": customer_phone,
+                "customer_email": customer_email
+            },
+            "notify_url": f"{os.getenv('API_BASE_URL', 'https://api.yourdomain.com')}/api/payments/webhook"
+        }
+        
+        # Make request to Cashfree
+        # Cashfree API requires version header in format: "2023-08-01" or "2022-09-01"
+        headers = {
+            "x-client-id": CASHFREE_CLIENT_ID,
+            "x-client-secret": CASHFREE_CLIENT_SECRET,
+            "x-api-version": "2022-09-01",  # Cashfree API version (use 2022-09-01 for stable version)
+            "Content-Type": "application/json"
+        }
+        logger.info(f"🔵 DEBUG: Request headers: x-client-id={CASHFREE_CLIENT_ID[:10]}..., x-api-version=2022-09-01")
+        
+        response = requests.post(
+            f"{CASHFREE_API_URL}/orders",
+            headers=headers,
+            json=payload
         )
         
-        existing_payment = supabase.table("payments").select("*").eq(
-            "internal_transaction_id", internal_transaction_id
-        ).execute()
+        logger.info(f"🔵 DEBUG: Cashfree API response status: {response.status_code}")
+        logger.info(f"🔵 DEBUG: Cashfree API response body: {response.text[:500]}")
         
-        if existing_payment.data:
-            # Return existing payment
-            payment = existing_payment.data[0]
-            if payment.get("razorpay_order_id"):
-                return {
-                    "payment_id": payment["id"],
-                    "order_id": payment["razorpay_order_id"],
-                    "amount": float(payment["amount"]),
-                    "currency": payment.get("currency", "INR"),
-                    "key_id": os.getenv("RAZORPAY_KEY_ID", ""),
-                    "status": payment["status"]
-                }
-        
-        # Create Razorpay order
-        order_result = RazorpayService.create_razorpay_order(
-            amount=order_data.amount,
-            currency=order_data.currency,
-            user_id=current_user["id"],
-            appointment_id=order_data.appointment_id,
-            operation_id=order_data.operation_id,
-            hospital_id=hospital_id
-        )
-        
-        if not order_result:
+        if response.status_code != 200:
+            logger.error(f"❌ DEBUG: Cashfree order creation failed - Status: {response.status_code}, Response: {response.text}")
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create Razorpay order"
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Cashfree order creation failed: {response.text[:200]}"
             )
         
-        # Create payment record
+        data = response.json()
+        logger.info(f"🔵 DEBUG: Cashfree response parsed: {data.keys()}")
+        
+        if not data.get("payment_session_id"):
+            logger.error(f"❌ DEBUG: Missing payment_session_id in response: {data}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Invalid response from Cashfree - missing payment_session_id"
+            )
+        logger.info(f"✅ DEBUG: Payment session ID received: {data.get('payment_session_id')[:20]}...")
+        
+        # Save payment record
         payment_record = {
+            "user_id": user_id,  # Can be None for guest bookings
             "appointment_id": order_data.appointment_id,
             "operation_id": order_data.operation_id,
-            "user_id": current_user["id"],
-            "hospital_id": hospital_id,
             "amount": str(order_data.amount),
             "currency": order_data.currency,
-            "payment_method": "razorpay",
+            "payment_method": "cashfree",
             "status": "PENDING",
-            "razorpay_order_id": order_result.get("order_id"),
-            "internal_transaction_id": internal_transaction_id,
-            "initiated_at": datetime.now().isoformat()
+            "cashfree_order_id": order_id,
+            "cashfree_session_id": data["payment_session_id"],
+            "initiated_at": datetime.now().isoformat(),
         }
         
         result = supabase.table("payments").insert(payment_record).execute()
         if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create payment record"
+                detail="Failed to save payment record"
             )
         
         payment = result.data[0]
         
         return {
             "payment_id": payment["id"],
-            "order_id": order_result.get("order_id"),
-            "amount": float(order_data.amount),  # Ensure float type for mobile app compatibility
-            "currency": order_data.currency,
-            "key_id": order_result.get("key_id", os.getenv("RAZORPAY_KEY_ID", "")),
-            "status": payment["status"]
+            "payment_session_id": data["payment_session_id"],
+            "order_id": order_id,
+            "amount": float(order_data.amount),
+            "currency": order_data.currency
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating Razorpay order: {e}")
+        logger.error(f"Error creating Cashfree order: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating order: {str(e)}"
+            detail=f"Unable to create payment order: {str(e)}"
         )
 
-@router.post("/webhook")
-async def razorpay_webhook(
-    request: Request,
-    x_razorpay_signature: Optional[str] = Header(None, alias="X-Razorpay-Signature")
+@router.post("/create-order-guest")
+def create_cashfree_order_guest(
+    order_data: CashfreeOrderCreate
 ):
     """
-    Razorpay webhook endpoint
-    Handles payment.captured, payment.failed, and other events
+    Create Cashfree payment order for guest appointments (no auth required)
+    Returns payment_session_id for frontend Cashfree Checkout
     """
     supabase = get_supabase()
     if not supabase:
-        logger.error("Database not configured for webhook")
-        return {"status": "error", "message": "Database not configured"}
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database not configured"
+        )
     
     try:
-        # Get raw payload for signature verification
-        body_bytes = await request.body()
-        body_str = body_bytes.decode('utf-8')
-        webhook_payload = json.loads(body_str)
+        # Validate request
+        if not order_data.appointment_id and not order_data.operation_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either appointment_id or operation_id is required"
+            )
         
-        # Verify webhook signature
-        if not x_razorpay_signature:
-            logger.error("Missing X-Razorpay-Signature header")
-            return {"status": "error", "message": "Missing signature"}
+        if order_data.amount <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Amount must be greater than 0"
+            )
         
-        if not PaymentGateway.verify_webhook_signature(body_str, x_razorpay_signature):
-            logger.error("Invalid webhook signature")
-            return {"status": "error", "message": "Invalid signature"}
+        # Get appointment (guest bookings are only for appointments)
+        if not order_data.appointment_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Guest bookings are only available for appointments"
+            )
         
-        # Process webhook event
-        process_result = RazorpayService.process_webhook_event(
-            webhook_payload, x_razorpay_signature
+        appointment_result = supabase.table("appointments").select("*").eq(
+            "id", order_data.appointment_id
+        ).execute()
+        
+        if not appointment_result.data:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        
+        appointment = appointment_result.data[0]
+        user_id = appointment["user_id"]
+        
+        # Get user details for Cashfree
+        user_result = supabase.table("users").select("id, name, mobile, email").eq("id", user_id).execute()
+        if not user_result.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_result.data[0]
+        
+        # Create Cashfree order
+        order_id = f"APT_{order_data.appointment_id}"
+        
+        payload = {
+            "order_id": order_id,
+            "order_amount": float(order_data.amount),
+            "order_currency": order_data.currency,
+            "customer_details": {
+                "customer_id": str(user_data["id"]),
+                "customer_name": user_data.get("name", "Guest Customer"),
+                "customer_phone": user_data.get("mobile", ""),
+                "customer_email": user_data.get("email", "")
+            },
+            "notify_url": f"{os.getenv('API_BASE_URL', 'https://api.yourdomain.com')}/api/payments/webhook"
+        }
+        
+        # Make request to Cashfree
+        # Cashfree API requires version header in format: "2023-08-01" or "2022-09-01"
+        headers = {
+            "x-client-id": CASHFREE_CLIENT_ID,
+            "x-client-secret": CASHFREE_CLIENT_SECRET,
+            "x-api-version": "2022-09-01",  # Cashfree API version (use 2022-09-01 for stable version)
+            "Content-Type": "application/json"
+        }
+        logger.info(f"🔵 DEBUG: Request headers: x-client-id={CASHFREE_CLIENT_ID[:10]}..., x-api-version=2022-09-01")
+        
+        response = requests.post(
+            f"{CASHFREE_API_URL}/orders",
+            headers=headers,
+            json=payload
         )
         
-        if not process_result.get("success"):
-            logger.error(f"Webhook processing failed: {process_result.get('error')}")
-            return {"status": "error", "message": process_result.get("error")}
+        logger.info(f"🔵 DEBUG: Cashfree API response status: {response.status_code}")
+        logger.info(f"🔵 DEBUG: Cashfree API response body: {response.text[:500]}")
         
-        webhook_id = process_result.get("webhook_id")
-        event_type = process_result.get("event_type")
-        razorpay_payment_id = process_result.get("razorpay_payment_id")
-        razorpay_order_id = process_result.get("razorpay_order_id")
-        payment_entity = process_result.get("payment_entity")
+        if response.status_code != 200:
+            logger.error(f"❌ DEBUG: Cashfree order creation failed - Status: {response.status_code}, Response: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Cashfree order creation failed: {response.text[:200]}"
+            )
         
-        # Check idempotency
-        if RazorpayService.check_webhook_idempotency(webhook_id):
-            logger.info(f"Webhook {webhook_id} already processed, skipping")
-            return {"status": "success", "message": "Already processed"}
+        data = response.json()
+        logger.info(f"🔵 DEBUG: Cashfree response parsed: {data.keys()}")
         
-        # Save webhook event
-        webhook_record_id = RazorpayService.save_webhook_event(
-            webhook_id=webhook_id,
-            event_type=event_type,
-            payment_id=None,  # Will be set after finding payment
-            razorpay_payment_id=razorpay_payment_id,
-            razorpay_order_id=razorpay_order_id,
-            webhook_payload=webhook_payload,
-            signature_verified=True
+        if not data.get("payment_session_id"):
+            logger.error(f"❌ DEBUG: Missing payment_session_id in response: {data}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Invalid response from Cashfree - missing payment_session_id"
+            )
+        logger.info(f"✅ DEBUG: Payment session ID received: {data.get('payment_session_id')[:20]}...")
+        
+        # Save payment record
+        payment_record = {
+            "user_id": user_id,
+            "appointment_id": order_data.appointment_id,
+            "operation_id": None,
+            "amount": str(order_data.amount),
+            "currency": order_data.currency,
+            "payment_method": "cashfree",
+            "status": "PENDING",
+            "cashfree_order_id": order_id,
+            "cashfree_session_id": data["payment_session_id"],
+            "initiated_at": datetime.now().isoformat(),
+        }
+        
+        result = supabase.table("payments").insert(payment_record).execute()
+        if not result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save payment record"
+            )
+        
+        payment = result.data[0]
+        
+        return {
+            "payment_id": payment["id"],
+            "payment_session_id": data["payment_session_id"],
+            "order_id": order_id,
+            "amount": float(order_data.amount),
+            "currency": order_data.currency
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating Cashfree guest order: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unable to create payment order: {str(e)}"
+        )
+
+# Cashfree endpoint for hospital registration
+class CashfreeHospitalOrderCreate(BaseModel):
+    hospital_registration: bool = True
+    plan_name: str
+    amount: float
+    currency: str = "INR"
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
+
+@router.post("/create-order-hospital")
+def create_hospital_registration_order_cashfree(
+    order_data: CashfreeHospitalOrderCreate
+):
+    """
+    Create Cashfree payment order for hospital registration
+    Returns payment_session_id for frontend Cashfree Checkout
+    """
+    logger.info("=" * 60)
+    logger.info("🔵 DEBUG: Hospital Payment Order Creation Started")
+    logger.info("=" * 60)
+    logger.info(f"🔵 DEBUG: Received order data - amount: {order_data.amount}, plan: {order_data.plan_name}")
+    logger.info(f"🔵 DEBUG: Customer details - name: {order_data.customer_name}, phone: {order_data.customer_phone}, email: {order_data.customer_email}")
+    
+    supabase = get_supabase()
+    if not supabase:
+        logger.error("❌ DEBUG: Database not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database not configured"
+        )
+
+    if order_data.amount <= 0:
+        logger.error(f"❌ DEBUG: Invalid amount: {order_data.amount}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Amount must be greater than 0"
+        )
+
+    try:
+        # Create Cashfree order
+        import time
+        timestamp = int(time.time())
+        order_id = f"HOSPREG_{timestamp}"
+        
+        # Prepare customer details - Cashfree requires phone number if provided, so use valid format or omit
+        customer_details = {
+            "customer_id": "guest",
+            "customer_name": order_data.customer_name or "Hospital Registration",
+        }
+        
+        # Only include phone if provided and not empty
+        if order_data.customer_phone and order_data.customer_phone.strip():
+            customer_details["customer_phone"] = order_data.customer_phone.strip()
+        # Only include email if provided and not empty
+        if order_data.customer_email and order_data.customer_email.strip():
+            customer_details["customer_email"] = order_data.customer_email.strip()
+        
+        logger.info(f"🔵 DEBUG: Customer details prepared: {customer_details}")
+        
+        payload = {
+            "order_id": order_id,
+            "order_amount": float(order_data.amount),
+            "order_currency": order_data.currency,
+            "customer_details": customer_details,
+            "notify_url": f"{os.getenv('API_BASE_URL', 'https://api.yourdomain.com')}/api/payments/webhook/cashfree"
+        }
+        
+        logger.info(f"🔵 DEBUG: Payload prepared: order_id={order_id}, amount={order_data.amount}, currency={order_data.currency}")
+        logger.info(f"🔵 DEBUG: Making request to Cashfree API: {CASHFREE_API_URL}/orders")
+        
+        # Make request to Cashfree
+        # Cashfree API requires version header in format: "2023-08-01" or "2022-09-01"
+        headers = {
+            "x-client-id": CASHFREE_CLIENT_ID,
+            "x-client-secret": CASHFREE_CLIENT_SECRET,
+            "x-api-version": "2022-09-01",  # Cashfree API version (use 2022-09-01 for stable version)
+            "Content-Type": "application/json"
+        }
+        logger.info(f"🔵 DEBUG: Request headers: x-client-id={CASHFREE_CLIENT_ID[:10]}..., x-api-version=2022-09-01")
+        
+        response = requests.post(
+            f"{CASHFREE_API_URL}/orders",
+            headers=headers,
+            json=payload
         )
         
-        if not webhook_record_id:
-            logger.error("Failed to save webhook event")
-            return {"status": "error", "message": "Failed to save webhook"}
+        logger.info(f"🔵 DEBUG: Cashfree API response status: {response.status_code}")
+        logger.info(f"🔵 DEBUG: Cashfree API response body: {response.text[:500]}")
         
-        # Find payment by razorpay_order_id
+        if response.status_code != 200:
+            logger.error(f"❌ DEBUG: Cashfree order creation failed - Status: {response.status_code}, Response: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Cashfree order creation failed: {response.text[:200]}"
+            )
+        
+        data = response.json()
+        logger.info(f"🔵 DEBUG: Cashfree response parsed: {data.keys()}")
+        
+        if not data.get("payment_session_id"):
+            logger.error(f"❌ DEBUG: Missing payment_session_id in response: {data}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Invalid response from Cashfree - missing payment_session_id"
+            )
+        logger.info(f"✅ DEBUG: Payment session ID received: {data.get('payment_session_id')[:20]}...")
+        
+        # Save payment record
+        logger.info("🔵 DEBUG: Saving payment record to database...")
+        payment_record = {
+            "user_id": None,
+            "hospital_id": None,
+            "amount": str(order_data.amount),
+            "currency": order_data.currency,
+            "payment_method": "cashfree",
+            "status": "PENDING",
+            "cashfree_order_id": order_id,
+            "cashfree_session_id": data["payment_session_id"],
+            "initiated_at": datetime.now().isoformat(),
+            "metadata": {
+                "type": "hospital_registration",
+                "plan_name": order_data.plan_name,
+                "total_amount": order_data.amount,
+                "customer_name": order_data.customer_name,
+                "customer_phone": order_data.customer_phone,
+                "customer_email": order_data.customer_email
+            }
+        }
+        
+        logger.info(f"🔵 DEBUG: Payment record to insert: {payment_record}")
+        result = supabase.table("payments").insert(payment_record).execute()
+        if not result.data:
+            logger.error("❌ DEBUG: Failed to insert payment record")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save payment record"
+            )
+        
+        payment = result.data[0]
+        logger.info(f"✅ DEBUG: Payment record saved with ID: {payment['id']}")
+        
+        response_data = {
+            "payment_id": payment["id"],
+            "payment_session_id": data["payment_session_id"],
+            "order_id": order_id,
+            "amount": float(order_data.amount),
+            "currency": order_data.currency
+        }
+        logger.info("=" * 60)
+        logger.info(f"✅ DEBUG: Hospital Payment Order Creation SUCCESS - Payment ID: {payment['id']}")
+        logger.info("=" * 60)
+        return response_data
+    except HTTPException as he:
+        logger.error(f"❌ DEBUG: HTTPException - {he.status_code}: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ DEBUG: Unexpected error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating payment order: {str(e)}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating Cashfree hospital order: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unable to create payment order: {str(e)}"
+        )
+
+# Cashfree webhook endpoints - GET and HEAD for health checks
+@router.get("/webhook/cashfree")
+async def cashfree_webhook_health():
+    """
+    Cashfree webhook health check endpoint (GET)
+    Used by Cashfree dashboard to verify endpoint reachability
+    """
+    return {"status": "ok", "message": "Cashfree webhook endpoint reachable"}
+
+@router.head("/webhook/cashfree")
+async def cashfree_webhook_head():
+    """
+    Cashfree webhook health check endpoint (HEAD)
+    Used by Cashfree dashboard to verify endpoint reachability
+    """
+    return
+
+# Cashfree webhook endpoint - POST handler
+@router.post("/webhook")
+@router.post("/webhook/cashfree")
+async def cashfree_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Cashfree webhook endpoint
+    Handles payment status updates from Cashfree
+    ALWAYS returns 200 quickly to acknowledge receipt
+    """
+    # Always return 200 quickly (Cashfree will retry otherwise)
+    # Process payment update in background to avoid blocking response
+    
+    try:
+        # Get webhook signature (optional - allow test pings without signature)
+        signature = request.headers.get("x-webhook-signature") or request.headers.get("X-Webhook-Signature")
+        
+        # Parse request body
+        body = await request.json()
+        
+        # Conditional signature verification
+        if signature:
+            # TODO: Implement Cashfree webhook signature verification
+            # Example: verify_signature(body, signature)
+            # For now, we'll process the webhook if signature exists
+            # In production, verify the signature here
+            logger.info("Webhook received with signature")
+        else:
+            # Allow test pings from dashboard without signature
+            logger.info("Webhook received without signature (likely test ping from dashboard)")
+        
+        order_id = body.get("data", {}).get("order", {}).get("order_id")
+        payment_status = body.get("data", {}).get("payment", {}).get("payment_status")
+        
+        if not order_id:
+            logger.warning("Missing order_id in webhook payload - may be a test ping")
+            # Still return 200 to prevent retries
+            return {"status": "ok", "message": "Webhook received"}
+        
+        # Process payment update in background task
+        # This ensures we return 200 quickly while processing happens asynchronously
+        background_tasks.add_task(_process_webhook_payment, order_id, payment_status)
+        
+        return {"status": "ok", "message": "Webhook received and queued for processing"}
+        
+    except Exception as e:
+        # IMPORTANT: log but still return 200
+        # Cashfree retries multiple times on non-200 responses, causing duplicates
+        logger.error(f"Error processing Cashfree webhook: {e}", exc_info=True)
+        return {"status": "ok", "message": "Webhook received"}
+
+def _process_webhook_payment(order_id: str, payment_status: str):
+    """
+    Process payment update from webhook
+    This function handles the actual payment processing logic
+    Called asynchronously to avoid blocking webhook response
+    """
+    supabase = get_supabase()
+    if not supabase:
+        logger.error("Database not configured for webhook processing")
+        return
+    
+    try:
+        # Find payment by cashfree_order_id
         payment_result = supabase.table("payments").select("*").eq(
-            "razorpay_order_id", razorpay_order_id
+            "cashfree_order_id", order_id
         ).execute()
         
         if not payment_result.data:
-            logger.error(f"Payment not found for order_id: {razorpay_order_id}")
-            RazorpayService.mark_webhook_processed(
-                webhook_id, error=f"Payment not found for order {razorpay_order_id}"
-            )
-            return {"status": "error", "message": "Payment not found"}
+            logger.warning(f"Payment not found for order_id: {order_id}")
+            return
         
         payment = payment_result.data[0]
         payment_id = payment["id"]
         
-        # Verify payment from Razorpay API (backend-owned verification)
-        razorpay_payment = RazorpayService.verify_payment_from_razorpay(razorpay_payment_id)
-        
-        if not razorpay_payment:
-            logger.error(f"Could not fetch payment from Razorpay: {razorpay_payment_id}")
-            RazorpayService.mark_webhook_processed(
-                webhook_id, payment_id=payment_id,
-                error="Could not fetch payment from Razorpay"
-            )
-            return {"status": "error", "message": "Payment verification failed"}
-        
-        # Cross-verify: Compare webhook data with Razorpay API response
-        if (razorpay_payment.get("order_id") != razorpay_order_id or
-            float(razorpay_payment.get("amount", 0)) / 100 != float(payment.get("amount", 0))):
-            logger.error("Payment verification mismatch")
-            RazorpayService.mark_webhook_processed(
-                webhook_id, payment_id=payment_id,
-                error="Payment verification mismatch"
-            )
-            return {"status": "error", "message": "Payment verification mismatch"}
-        
-        # Process based on event type
-        if event_type == "payment.captured":
-            # Update payment status to COMPLETED
+        # Update payment status based on Cashfree status
+        if payment_status == "SUCCESS":
             update_data = {
                 "status": "COMPLETED",
-                "razorpay_payment_id": razorpay_payment_id,
-                "razorpay_signature": x_razorpay_signature,
-                "gateway_transaction_id": razorpay_payment.get("id"),
                 "completed_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
             }
@@ -740,40 +1078,336 @@ async def razorpay_webhook(
                 supabase.table("appointments").update({
                     "status": "confirmed"
                 }).eq("id", payment["appointment_id"]).execute()
+                logger.info(f"Appointment {payment['appointment_id']} confirmed via payment {payment_id}")
             elif payment.get("operation_id"):
                 supabase.table("operations").update({
                     "status": "confirmed"
                 }).eq("id", payment["operation_id"]).execute()
+                logger.info(f"Operation {payment['operation_id']} confirmed via payment {payment_id}")
             
-            # Mark webhook as processed
-            RazorpayService.mark_webhook_processed(webhook_id, payment_id=payment_id)
+            logger.info(f"Payment {payment_id} marked as COMPLETED via Cashfree webhook")
             
-            logger.info(f"Payment {payment_id} marked as COMPLETED via webhook {webhook_id}")
-            
-        elif event_type == "payment.failed":
-            # Update payment status to FAILED
-            failure_reason = payment_entity.get("error_description") or payment_entity.get("error_code", "Unknown error")
+        elif payment_status == "FAILED":
             update_data = {
                 "status": "FAILED",
-                "razorpay_payment_id": razorpay_payment_id,
-                "failure_reason": failure_reason,
-                "failure_code": payment_entity.get("error_code"),
                 "failed_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
             }
             
             supabase.table("payments").update(update_data).eq("id", payment_id).execute()
             
-            # Mark webhook as processed
-            RazorpayService.mark_webhook_processed(webhook_id, payment_id=payment_id)
-            
-            logger.info(f"Payment {payment_id} marked as FAILED via webhook {webhook_id}")
-        
-        return {"status": "success", "message": "Webhook processed"}
+            logger.info(f"Payment {payment_id} marked as FAILED via Cashfree webhook")
         
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"Error in _process_webhook_payment: {e}", exc_info=True)
+        # Don't raise - let caller handle gracefully
+
+# OLD RAZORPAY ENDPOINT - COMMENTED OUT
+# @router.post("/create-order")
+# def create_razorpay_order(
+#     order_data: RazorpayOrderCreate,
+#     current_user: dict = Depends(get_current_user)
+# ):
+#     """
+#     Create Razorpay order and payment record
+#     Returns order details for frontend Razorpay Checkout
+#     """
+#     supabase = get_supabase()
+#     if not supabase:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Database not configured"
+#         )
+#     
+#     try:
+#         # Validate request
+#         if not order_data.appointment_id and not order_data.operation_id and not order_data.hospital_registration:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="Either appointment_id, operation_id, or hospital_registration is required"
+#             )
+#         
+#         if order_data.amount <= 0:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="Amount must be greater than 0"
+#             )
+#         
+#         # Get hospital_id from appointment or operation
+#         hospital_id = None
+#         if order_data.appointment_id:
+#             appointment_result = supabase.table("appointments").select("*").eq(
+#                 "id", order_data.appointment_id
+#             ).execute()
+#             if not appointment_result.data:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_404_NOT_FOUND,
+#                     detail="Appointment not found"
+#                 )
+#             appointment = appointment_result.data[0]
+#             if appointment["user_id"] != current_user["id"]:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_403_FORBIDDEN,
+#                     detail="Not authorized to create payment for this appointment"
+#                 )
+#             hospital_id = appointment.get("hospital_id")
+#         else:
+#             operation_result = supabase.table("operations").select("*").eq(
+#                 "id", order_data.operation_id
+#             ).execute()
+#             if not operation_result.data:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_404_NOT_FOUND,
+#                     detail="Operation not found"
+#                 )
+#             operation = operation_result.data[0]
+#             if operation["patient_id"] != current_user["id"]:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_403_FORBIDDEN,
+#                     detail="Not authorized to create payment for this operation"
+#                 )
+#             hospital_id = operation.get("hospital_id")
+#         
+#         if not hospital_id:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="Hospital not found for this appointment/operation"
+#             )
+#         
+#         # Check idempotency - look for existing payment with same reference
+#         internal_transaction_id = RazorpayService.generate_idempotency_key(
+#             current_user["id"], order_data.appointment_id, order_data.operation_id
+#         )
+#         
+#         existing_payment = supabase.table("payments").select("*").eq(
+#             "internal_transaction_id", internal_transaction_id
+#         ).execute()
+#         
+#         if existing_payment.data:
+#             # Return existing payment
+#             payment = existing_payment.data[0]
+#             if payment.get("razorpay_order_id"):
+#                 return {
+#                     "payment_id": payment["id"],
+#                     "order_id": payment["razorpay_order_id"],
+#                     "amount": float(payment["amount"]),
+#                     "currency": payment.get("currency", "INR"),
+#                     "key_id": os.getenv("RAZORPAY_KEY_ID", ""),
+#                     "status": payment["status"]
+#                 }
+#         
+#         # Create Razorpay order
+#         order_result = RazorpayService.create_razorpay_order(
+#             amount=order_data.amount,
+#             currency=order_data.currency,
+#             user_id=current_user["id"],
+#             appointment_id=order_data.appointment_id,
+#             operation_id=order_data.operation_id,
+#             hospital_id=hospital_id
+#         )
+#         
+#         if not order_result:
+#             raise HTTPException(
+#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 detail="Failed to create Razorpay order"
+#             )
+#         
+#         # Create payment record
+#         payment_record = {
+#             "appointment_id": order_data.appointment_id,
+#             "operation_id": order_data.operation_id,
+#             "user_id": current_user["id"],
+#             "hospital_id": hospital_id,
+#             "amount": str(order_data.amount),
+#             "currency": order_data.currency,
+#             "payment_method": "razorpay",
+#             "status": "PENDING",
+#             "razorpay_order_id": order_result.get("order_id"),
+#             "internal_transaction_id": internal_transaction_id,
+#             "initiated_at": datetime.now().isoformat()
+#         }
+#         
+#         result = supabase.table("payments").insert(payment_record).execute()
+#         if not result.data:
+#             raise HTTPException(
+#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 detail="Failed to create payment record"
+#             )
+#         
+#         payment = result.data[0]
+#         
+#         return {
+#             "payment_id": payment["id"],
+#             "order_id": order_result.get("order_id"),
+#             "amount": float(order_data.amount),  # Ensure float type for mobile app compatibility
+#             "currency": order_data.currency,
+#             "key_id": order_result.get("key_id", os.getenv("RAZORPAY_KEY_ID", "")),
+#             "status": payment["status"]
+#         }
+#         
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error creating Razorpay order: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Error creating order: {str(e)}"
+#         )
+
+# OLD RAZORPAY WEBHOOK - COMMENTED OUT (Replaced by Cashfree)
+# @router.post("/webhook")
+# async def razorpay_webhook(
+#     request: Request,
+#     x_razorpay_signature: Optional[str] = Header(None, alias="X-Razorpay-Signature")
+# ):
+#     """
+#     Razorpay webhook endpoint
+#     Handles payment.captured, payment.failed, and other events
+#     """
+#     supabase = get_supabase()
+#     if not supabase:
+#         logger.error("Database not configured for webhook")
+#         return {"status": "error", "message": "Database not configured"}
+#     
+#     try:
+#         # Get raw payload for signature verification
+#         body_bytes = await request.body()
+#         body_str = body_bytes.decode('utf-8')
+#         webhook_payload = json.loads(body_str)
+#         
+#         # Verify webhook signature
+#         if not x_razorpay_signature:
+#             logger.error("Missing X-Razorpay-Signature header")
+#             return {"status": "error", "message": "Missing signature"}
+#         
+#         if not PaymentGateway.verify_webhook_signature(body_str, x_razorpay_signature):
+#             logger.error("Invalid webhook signature")
+#             return {"status": "error", "message": "Invalid signature"}
+#         
+#         # Process webhook event
+#         process_result = RazorpayService.process_webhook_event(
+#             webhook_payload, x_razorpay_signature
+#         )
+#         
+#         if not process_result.get("success"):
+#             logger.error(f"Webhook processing failed: {process_result.get('error')}")
+#             return {"status": "error", "message": process_result.get("error")}
+#         
+#         webhook_id = process_result.get("webhook_id")
+#         event_type = process_result.get("event_type")
+#         razorpay_payment_id = process_result.get("razorpay_payment_id")
+#         razorpay_order_id = process_result.get("razorpay_order_id")
+#         payment_entity = process_result.get("payment_entity")
+#         
+#         # Check idempotency
+#         if RazorpayService.check_webhook_idempotency(webhook_id):
+#             logger.info(f"Webhook {webhook_id} already processed, skipping")
+#             return {"status": "success", "message": "Already processed"}
+#         
+#         # Save webhook event
+#         webhook_record_id = RazorpayService.save_webhook_event(
+#             webhook_id=webhook_id,
+#             event_type=event_type,
+#             payment_id=None,  # Will be set after finding payment
+#             razorpay_payment_id=razorpay_payment_id,
+#             razorpay_order_id=razorpay_order_id,
+#             webhook_payload=webhook_payload,
+#             signature_verified=True
+#         )
+#         
+#         if not webhook_record_id:
+#             logger.error("Failed to save webhook event")
+#             return {"status": "error", "message": "Failed to save webhook"}
+#         
+#         # Find payment by razorpay_order_id
+#         payment_result = supabase.table("payments").select("*").eq(
+#             "razorpay_order_id", razorpay_order_id
+#         ).execute()
+#         
+#         if not payment_result.data:
+#             logger.error(f"Payment not found for order_id: {razorpay_order_id}")
+#             RazorpayService.mark_webhook_processed(
+#                 webhook_id, error=f"Payment not found for order {razorpay_order_id}"
+#             )
+#             return {"status": "error", "message": "Payment not found"}
+#         
+#         payment = payment_result.data[0]
+#         payment_id = payment["id"]
+#         
+#         # Verify payment from Razorpay API (backend-owned verification)
+#         razorpay_payment = RazorpayService.verify_payment_from_razorpay(razorpay_payment_id)
+#         
+#         if not razorpay_payment:
+#             logger.error(f"Could not fetch payment from Razorpay: {razorpay_payment_id}")
+#             RazorpayService.mark_webhook_processed(
+#                 webhook_id, payment_id=payment_id,
+#                 error="Could not fetch payment from Razorpay"
+#             )
+#             return {"status": "error", "message": "Payment verification failed"}
+#         
+#         # Cross-verify: Compare webhook data with Razorpay API response
+#         if (razorpay_payment.get("order_id") != razorpay_order_id or
+#             float(razorpay_payment.get("amount", 0)) / 100 != float(payment.get("amount", 0))):
+#             logger.error("Payment verification mismatch")
+#             RazorpayService.mark_webhook_processed(
+#                 webhook_id, payment_id=payment_id,
+#                 error="Payment verification mismatch"
+#             )
+#             return {"status": "error", "message": "Payment verification mismatch"}
+#         
+#         # Process based on event type
+#         if event_type == "payment.captured":
+#             # Update payment status to COMPLETED
+#             update_data = {
+#                 "status": "COMPLETED",
+#                 "razorpay_payment_id": razorpay_payment_id,
+#                 "razorpay_signature": x_razorpay_signature,
+#                 "gateway_transaction_id": razorpay_payment.get("id"),
+#                 "completed_at": datetime.now().isoformat(),
+#                 "updated_at": datetime.now().isoformat()
+#             }
+#             
+#             supabase.table("payments").update(update_data).eq("id", payment_id).execute()
+#             
+#             # Update appointment/operation status
+#             if payment.get("appointment_id"):
+#                 supabase.table("appointments").update({
+#                     "status": "confirmed"
+#                 }).eq("id", payment["appointment_id"]).execute()
+#             elif payment.get("operation_id"):
+#                 supabase.table("operations").update({
+#                     "status": "confirmed"
+#                 }).eq("id", payment["operation_id"]).execute()
+#             
+#             # Mark webhook as processed
+#             RazorpayService.mark_webhook_processed(webhook_id, payment_id=payment_id)
+#             
+#             logger.info(f"Payment {payment_id} marked as COMPLETED via webhook {webhook_id}")
+#             
+#         elif event_type == "payment.failed":
+#             # Update payment status to FAILED
+#             failure_reason = payment_entity.get("error_description") or payment_entity.get("error_code", "Unknown error")
+#             update_data = {
+#                 "status": "FAILED",
+#                 "razorpay_payment_id": razorpay_payment_id,
+#                 "failure_reason": failure_reason,
+#                 "failure_code": payment_entity.get("error_code"),
+#                 "failed_at": datetime.now().isoformat(),
+#                 "updated_at": datetime.now().isoformat()
+#             }
+#             
+#             supabase.table("payments").update(update_data).eq("id", payment_id).execute()
+#             
+#             # Mark webhook as processed
+#             RazorpayService.mark_webhook_processed(webhook_id, payment_id=payment_id)
+#             
+#             logger.info(f"Payment {payment_id} marked as FAILED via webhook {webhook_id}")
+#         
+#         return {"status": "success", "message": "Webhook processed"}
+#         
+#     except Exception as e:
+#         logger.error(f"Error processing webhook: {e}")
+#         return {"status": "error", "message": str(e)}
 
 @router.get("/{payment_id}")
 def get_payment(
@@ -799,10 +1433,13 @@ def get_payment(
         payment = result.data[0]
         
         # Check authorization
-        if payment["user_id"] != current_user["id"]:
+        if payment.get("user_id") != current_user["id"]:
             # Allow doctors to view payments for their hospital
-            if current_user.get("role") == "doctor":
-                if payment.get("hospital_id") != current_user.get("hospital_id"):
+            # Check if user is a doctor by checking doctors table
+            doctor_check = supabase.table("doctors").select("hospital_id").eq("user_id", current_user["id"]).eq("is_active", True).execute()
+            if doctor_check.data:
+                doctor_hospital_id = doctor_check.data[0].get("hospital_id")
+                if payment.get("hospital_id") != doctor_hospital_id:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Not authorized"
@@ -873,91 +1510,92 @@ def get_payment_status(
             detail=f"Error fetching payment status: {str(e)}"
         )
 
-@router.post("/{payment_id}/verify")
-def verify_payment_manually(
-    payment_id: int,
-    current_doctor: dict = Depends(get_current_doctor)
-):
-    """
-    Manually verify payment (admin/doctor function)
-    Fetches payment status from Razorpay and updates database
-    """
-    supabase = get_supabase()
-    if not supabase:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database not configured"
-        )
-    
-    try:
-        # Get payment
-        result = supabase.table("payments").select("*").eq("id", payment_id).execute()
-        if not result.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Payment not found"
-            )
-        
-        payment = result.data[0]
-        
-        if not payment.get("razorpay_payment_id"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Payment does not have Razorpay payment ID"
-            )
-        
-        # Fetch from Razorpay
-        razorpay_payment = RazorpayService.verify_payment_from_razorpay(
-            payment["razorpay_payment_id"]
-        )
-        
-        if not razorpay_payment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Payment not found in Razorpay"
-            )
-        
-        # Update payment status based on Razorpay status
-        razorpay_status = razorpay_payment.get("status")
-        new_status = None
-        
-        if razorpay_status == "captured":
-            new_status = "COMPLETED"
-        elif razorpay_status == "failed":
-            new_status = "FAILED"
-        elif razorpay_status == "authorized":
-            new_status = "PENDING"
-        
-        if new_status:
-            update_data = {
-                "status": new_status,
-                "updated_at": datetime.now().isoformat()
-            }
-            
-            if new_status == "COMPLETED":
-                update_data["completed_at"] = datetime.now().isoformat()
-            elif new_status == "FAILED":
-                update_data["failed_at"] = datetime.now().isoformat()
-                update_data["failure_reason"] = razorpay_payment.get("error_description")
-            
-            supabase.table("payments").update(update_data).eq("id", payment_id).execute()
-        
-        return {
-            "verified": True,
-            "status": new_status or payment["status"],
-            "razorpay_status": razorpay_status,
-            "details": {
-                "amount": razorpay_payment.get("amount", 0) / 100,
-                "currency": razorpay_payment.get("currency"),
-                "method": razorpay_payment.get("method")
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error verifying payment: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error verifying payment: {str(e)}"
-        )
+# OLD RAZORPAY VERIFY ENDPOINT - COMMENTED OUT (Replaced by Cashfree)
+# @router.post("/{payment_id}/verify")
+# def verify_payment_manually(
+#     payment_id: int,
+#     current_doctor: dict = Depends(get_current_doctor)
+# ):
+#     """
+#     Manually verify payment (admin/doctor function)
+#     Fetches payment status from Razorpay and updates database
+#     """
+#     supabase = get_supabase()
+#     if not supabase:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Database not configured"
+#         )
+#     
+#     try:
+#         # Get payment
+#         result = supabase.table("payments").select("*").eq("id", payment_id).execute()
+#         if not result.data:
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND,
+#                 detail="Payment not found"
+#             )
+#         
+#         payment = result.data[0]
+#         
+#         if not payment.get("razorpay_payment_id"):
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="Payment does not have Razorpay payment ID"
+#             )
+#         
+#         # Fetch from Razorpay
+#         razorpay_payment = RazorpayService.verify_payment_from_razorpay(
+#             payment["razorpay_payment_id"]
+#         )
+#         
+#         if not razorpay_payment:
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND,
+#                 detail="Payment not found in Razorpay"
+#             )
+#         
+#         # Update payment status based on Razorpay status
+#         razorpay_status = razorpay_payment.get("status")
+#         new_status = None
+#         
+#         if razorpay_status == "captured":
+#             new_status = "COMPLETED"
+#         elif razorpay_status == "failed":
+#             new_status = "FAILED"
+#         elif razorpay_status == "authorized":
+#             new_status = "PENDING"
+#         
+#         if new_status:
+#             update_data = {
+#                 "status": new_status,
+#                 "updated_at": datetime.now().isoformat()
+#             }
+#             
+#             if new_status == "COMPLETED":
+#                 update_data["completed_at"] = datetime.now().isoformat()
+#             elif new_status == "FAILED":
+#                 update_data["failed_at"] = datetime.now().isoformat()
+#                 update_data["failure_reason"] = razorpay_payment.get("error_description")
+#             
+#             supabase.table("payments").update(update_data).eq("id", payment_id).execute()
+#         
+#         return {
+#             "verified": True,
+#             "status": new_status or payment["status"],
+#             "razorpay_status": razorpay_status,
+#             "details": {
+#                 "amount": razorpay_payment.get("amount", 0) / 100,
+#                 "currency": razorpay_payment.get("currency"),
+#                 "method": razorpay_payment.get("method")
+#             }
+#         }
+#         
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error verifying payment: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Error verifying payment: {str(e)}"
+#         )

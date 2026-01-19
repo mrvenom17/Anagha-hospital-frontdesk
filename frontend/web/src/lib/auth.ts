@@ -24,6 +24,10 @@ export const login = async (mobile: string, password: string): Promise<User> => 
     const response = await authAPI.login(mobile, password);
     // Assuming response contains { access_token: string, user: User }
     setAuthToken(response.access_token);
+    // Store user in localStorage for quick access
+    if (response.user) {
+      localStorage.setItem('user', JSON.stringify(response.user));
+    }
     return response.user;
   } catch (error) {
     console.error("Login error:", error);
@@ -38,13 +42,27 @@ export const register = async (userData: {
   password: string;
   role?: string;
   email?: string;
+  address_line1?: string;
+  hospital_id?: number;
+  degree?: string;
+  institute_name?: string;
+  company_name?: string;
+  city?: string;
+  state?: string;
+  specialty?: string;
 }): Promise<User> => {
   try {
+    console.log("🔵 DEBUG: Register function called with data:", userData);
     const response = await authAPI.register(userData);
+    console.log("✅ DEBUG: Registration API response:", response);
     setAuthToken(response.access_token);
+    // Store user in localStorage for quick access
+    if (response.user) {
+      localStorage.setItem('user', JSON.stringify(response.user));
+    }
     return response.user;
   } catch (error) {
-    console.error("Registration error:", error);
+    console.error("❌ DEBUG: Registration error:", error);
     throw error;
   }
 };
@@ -52,6 +70,7 @@ export const register = async (userData: {
 // Logout function
 export const logout = (): void => {
   removeAuthToken();
+  localStorage.removeItem('user');
   // Using window.location.href ensures a clean state wipe on logout
   window.location.href = '/login';
 };
@@ -62,10 +81,16 @@ export const getCurrentUser = async (): Promise<User | null> => {
     if (!isAuthenticated()) {
       return null;
     }
-    return await authAPI.getCurrentUser();
+    const user = await authAPI.getCurrentUser();
+    // Update localStorage with fresh user data
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    }
+    return user;
   } catch (error) {
     // If the token is invalid/expired, clear it
     removeAuthToken();
+    localStorage.removeItem('user');
     return null;
   }
 };

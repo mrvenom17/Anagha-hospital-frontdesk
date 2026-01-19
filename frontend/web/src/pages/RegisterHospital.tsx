@@ -126,16 +126,53 @@ const RegisterHospital = () => {
     const loadPricing = async () => {
       try {
         const pricing = await adminAPI.getPublicPricing();
-        if (pricing?.plans) {
-          setPricingPlans(pricing.plans);
+        if (pricing?.plans && Array.isArray(pricing.plans) && pricing.plans.length > 0) {
+          // Transform backend pricing to frontend format
+          // Handle both formats: new format (price/period) and old format (installationPrice/monthlyPrice)
+          const transformedPlans = pricing.plans.map((plan: any) => {
+            // Check if it's the new format (has 'price' field)
+            if (plan.price !== undefined) {
+              // New format: price is monthly, need to calculate installation and monthly
+              const monthlyPrice = typeof plan.price === 'string' ? parseFloat(plan.price) : plan.price;
+              // For installation, use a multiplier (e.g., 5x monthly) or set a default
+              const installationPrice = monthlyPrice * 5; // 5 months worth as installation
+              
+              return {
+                name: plan.name || "Plan",
+                description: plan.description || `${plan.name} Package`,
+                installationPrice: installationPrice,
+                monthlyPrice: monthlyPrice,
+                features: Array.isArray(plan.features) ? plan.features : [],
+                popular: plan.popular || false,
+              };
+            } else {
+              // Old format: has installationPrice and monthlyPrice
+              return {
+                name: plan.name || "Plan",
+                description: plan.description || `${plan.name} Package`,
+                installationPrice: plan.installationPrice || plan.installation || plan.installation_price || 0,
+                monthlyPrice: plan.monthlyPrice || plan.monthly || plan.monthly_price || 0,
+                features: Array.isArray(plan.features) ? plan.features : [],
+                popular: plan.popular || false,
+              };
+            }
+          });
+          
+          // Only update if we got valid plans with prices > 0
+          if (transformedPlans.length > 0 && transformedPlans.every((p: any) => p.installationPrice > 0 && p.monthlyPrice > 0)) {
+            setPricingPlans(transformedPlans);
+          } else {
+            console.warn("Invalid pricing data received, using defaults");
+            // Use default plans below
+          }
         } else {
           // Fallback to default plans
           setPricingPlans([
             {
               name: "Starter",
               description: "For 1 Doctor / 1 Hospital",
-              installationPrice: 5000,
-              monthlyPrice: 1000,
+              installationPrice: 1,
+              monthlyPrice: 1,
               features: [
                 "1 Doctor profile",
                 "1 Hospital",
@@ -149,8 +186,8 @@ const RegisterHospital = () => {
             {
               name: "Professional",
               description: "For 5 Doctors in 1 Hospital",
-              installationPrice: 10000,
-              monthlyPrice: 2000,
+              installationPrice: 5,
+              monthlyPrice: 5,
               features: [
                 "Up to 5 Doctor profiles",
                 "1 Hospital",
@@ -165,8 +202,8 @@ const RegisterHospital = () => {
             {
               name: "Enterprise",
               description: "For 10 Doctors & 5 Hospitals",
-              installationPrice: 20000,
-              monthlyPrice: 5000,
+              installationPrice: 10,
+              monthlyPrice: 10,
               features: [
                 "Up to 10 Doctor profiles",
                 "Up to 5 Hospitals (same ownership)",
@@ -187,8 +224,8 @@ const RegisterHospital = () => {
           {
             name: "Starter",
             description: "For 1 Doctor / 1 Hospital",
-            installationPrice: 5000,
-            monthlyPrice: 1000,
+            installationPrice: 1,
+            monthlyPrice: 1,
             features: [
               "1 Doctor profile",
               "1 Hospital",
@@ -202,8 +239,8 @@ const RegisterHospital = () => {
           {
             name: "Professional",
             description: "For 5 Doctors in 1 Hospital",
-            installationPrice: 10000,
-            monthlyPrice: 2000,
+            installationPrice: 5,
+            monthlyPrice: 5,
             features: [
               "Up to 5 Doctor profiles",
               "1 Hospital",
@@ -218,8 +255,8 @@ const RegisterHospital = () => {
           {
             name: "Enterprise",
             description: "For 10 Doctors & 5 Hospitals",
-            installationPrice: 20000,
-            monthlyPrice: 5000,
+            installationPrice: 10,
+            monthlyPrice: 10,
             features: [
               "Up to 10 Doctor profiles",
               "Up to 5 Hospitals (same ownership)",

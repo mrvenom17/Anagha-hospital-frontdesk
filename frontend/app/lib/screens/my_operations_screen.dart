@@ -8,13 +8,15 @@ class Operation {
   final int id;
   final int patientId;
   final String specialty;
-  final DateTime date;
+  final DateTime date; // Backend returns 'date' (mapped from 'operation_date')
   final int doctorId;
+  final int hospitalId; // Required (not nullable)
   final String status;
-  final String? notes;
+  final String? notes; // Backend returns 'notes' for operations
   final DateTime createdAt;
   final String? patientName;
   final String? doctorName;
+  final String? hospitalName; // Hospital name from backend
 
   Operation({
     required this.id,
@@ -22,25 +24,33 @@ class Operation {
     required this.specialty,
     required this.date,
     required this.doctorId,
+    required this.hospitalId, // Required now
     required this.status,
     this.notes,
     required this.createdAt,
     this.patientName,
     this.doctorName,
+    this.hospitalName,
   });
 
   factory Operation.fromJson(Map<String, dynamic> json) {
+    // Backend returns 'date' (mapped from 'operation_date' in DB)
+    // Handle both 'date' and 'operation_date' for backward compatibility
+    String dateStr = json['date'] ?? json['operation_date'] ?? DateTime.now().toIso8601String();
+    
     return Operation(
       id: json['id'],
       patientId: json['patient_id'],
-      specialty: json['specialty'],
-      date: DateTime.parse(json['date']),
+      specialty: json['specialty'] ?? '',
+      date: DateTime.parse(dateStr),
       doctorId: json['doctor_id'],
-      status: json['status'],
-      notes: json['notes'],
-      createdAt: DateTime.parse(json['created_at']),
+      hospitalId: json['hospital_id'] ?? 0, // Default to 0 if null (should not happen)
+      status: json['status'] ?? 'pending',
+      notes: json['notes'], // Backend returns 'notes', not 'reason'
+      createdAt: DateTime.parse(json['created_at'] ?? DateTime.now().toIso8601String()),
       patientName: json['patient_name'],
       doctorName: json['doctor_name'],
+      hospitalName: json['hospital_name'], // Backend returns 'hospital_name'
     );
   }
 }

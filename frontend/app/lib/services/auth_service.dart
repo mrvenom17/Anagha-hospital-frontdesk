@@ -70,22 +70,55 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await ApiService.post('/api/users/register', userData);
+      // Use different endpoint for doctor registration
+      final role = userData['role']?.toString().toLowerCase();
+      final endpoint = (role == 'doctor') 
+          ? '/api/users/register-doctor' 
+          : '/api/users/register';
+      
+      print('Registration: Using endpoint $endpoint for role $role');
+      
+      final response = await ApiService.post(endpoint, userData);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         try {
           final data = jsonDecode(response.body);
           _token = data['access_token'];
-          _user = User.fromJson(data['user']);
+          
+          // For doctor registration, the response structure may differ
+          // Try to get user data from response
+          if (data['user'] != null) {
+            _user = User.fromJson(data['user']);
+          } else if (data['doctor'] != null) {
+            // Doctor registration might return 'doctor' field
+            // Convert doctor data to user format
+            final doctorData = data['doctor'];
+            _user = User.fromJson({
+              'id': doctorData['id'] ?? doctorData['user_id'],
+              'name': doctorData['name'],
+              'mobile': doctorData['mobile'],
+              'role': 'doctor',
+              'degree': doctorData['degree'],
+              'institute_name': doctorData['institute_name'],
+              'hospital_id': doctorData['hospital_id'],
+            });
+          }
 
           // Save to local storage
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('auth_token', _token!);
-          await prefs.setString('user_data', jsonEncode(_user!.toJson()));
+          if (_token != null && _user != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('auth_token', _token!);
+            await prefs.setString('user_data', jsonEncode(_user!.toJson()));
 
-          _isLoading = false;
-          notifyListeners();
-          return true;
+            _isLoading = false;
+            notifyListeners();
+            return true;
+          } else {
+            print('Registration: Missing token or user data in response');
+            _isLoading = false;
+            notifyListeners();
+            return false;
+          }
         } catch (parseError) {
           print('Error parsing registration response: $parseError');
           print('Response body: ${response.body}');

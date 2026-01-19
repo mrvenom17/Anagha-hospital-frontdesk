@@ -3,8 +3,6 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/payment_service.dart';
 import '../services/auth_service.dart';
@@ -38,7 +36,9 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
   Hospital? _selectedHospital;
   bool _isLoading = false;
   bool _showPaymentOptions = false;
-  String? _selectedPaymentMethod;
+  int? _paymentId;
+  String? _paymentSessionId;
+  int? _appointmentId;
   List<Hospital> _hospitals = [];
   Map<String, dynamic>? _selectedDoctor;
   int? _selectedDoctorId;
@@ -119,61 +119,20 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
     }
   }
 
-  String? _getUpiIdForMethod(String method) {
-    if (_selectedHospital == null) return null;
-    
-    switch (method) {
-      case 'googlepay':
-        return _selectedHospital!.googlePayUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'phonepe':
-        return _selectedHospital!.phonePeUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'paytm':
-        return _selectedHospital!.paytmUpiId ?? _selectedHospital!.defaultUpiId;
-      case 'bhim':
-        return _selectedHospital!.bhimUpiId ?? _selectedHospital!.defaultUpiId;
-      default:
-        return _selectedHospital!.defaultUpiId;
-    }
-  }
-
-  Future<void> _openUpiApp(String method, String? upiId) async {
-    if (upiId == null || upiId.isEmpty) {
+  Future<void> _openCashfreeCheckout() async {
+    if (_paymentSessionId == null || _paymentSessionId!.isEmpty) {
       Fluttertoast.showToast(
-        msg: 'UPI ID not configured for this payment method',
+        msg: 'Payment session not ready. Please try again.',
         backgroundColor: AppColors.errorColor,
       );
       return;
     }
 
-    String upiUrl = '';
-    switch (method) {
-      case 'googlepay':
-        upiUrl = 'tez://upi/pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'phonepe':
-        upiUrl = 'phonepe://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'paytm':
-        upiUrl = 'paytmmp://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-      case 'bhim':
-        upiUrl = 'upi://pay?pa=$upiId&pn=Hospital&am=&cu=INR';
-        break;
-    }
-
     try {
-      final uri = Uri.parse(upiUrl);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        Fluttertoast.showToast(
-          msg: 'Payment app not installed',
-          backgroundColor: AppColors.errorColor,
-        );
-      }
+      await PaymentService.openCashfreeCheckout(_paymentSessionId!);
     } catch (e) {
       Fluttertoast.showToast(
-        msg: 'Error opening payment app: $e',
+        msg: 'Unable to open payment gateway',
         backgroundColor: AppColors.errorColor,
       );
     }
@@ -231,23 +190,27 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
 
     try {
       // Step 1: Create appointment
-      final appointmentData = {
-        'pharma_user_id': authService.user!.id,
-        'doctor_id': _selectedDoctorId,
-        'appointment_date': DateFormat('yyyy-MM-dd').format(_selectedDate),
-        'appointment_time': '${_timeController.text} ${_selectedAmPm}',
-        'company_name': _companyNameController.text.trim(),
-        'product1': _product1Controller.text.trim().isEmpty ? null : _product1Controller.text.trim(),
-        'product2': _product2Controller.text.trim().isEmpty ? null : _product2Controller.text.trim(),
-        'product3': _product3Controller.text.trim().isEmpty ? null : _product3Controller.text.trim(),
-        'product4': _product4Controller.text.trim().isEmpty ? null : _product4Controller.text.trim(),
-        'place': _placeController.text.trim(),
-        'hospital_id': _selectedHospital!.id,
-      };
+      final timeString = _timeController.text.trim();
+      final timeSlot = timeString.contains(':') ? timeString.substring(0, 5) : timeString;
+      final reasonParts = <String>[
+        if (_companyNameController.text.trim().isNotEmpty) 'Company: ${_companyNameController.text.trim()}',
+        if (_product1Controller.text.trim().isNotEmpty) 'Product 1: ${_product1Controller.text.trim()}',
+        if (_product2Controller.text.trim().isNotEmpty) 'Product 2: ${_product2Controller.text.trim()}',
+        if (_product3Controller.text.trim().isNotEmpty) 'Product 3: ${_product3Controller.text.trim()}',
+        if (_product4Controller.text.trim().isNotEmpty) 'Product 4: ${_product4Controller.text.trim()}',
+        if (_placeController.text.trim().isNotEmpty) 'Place: ${_placeController.text.trim()}',
+      ];
+      final reasonText = reasonParts.isNotEmpty ? reasonParts.join(' | ') : null;
 
       final appointmentResponse = await ApiService.post(
-        '/api/pharma-appointments/book',
-        appointmentData,
+        '/api/appointments/book',
+        {
+          'doctor_id': _selectedDoctorId,
+          'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
+          'time_slot': timeSlot,
+          'reason': reasonText,
+        },
+        requiresAuth: true,
       );
 
       if (appointmentResponse.statusCode != 200 && appointmentResponse.statusCode != 201) {
@@ -260,30 +223,22 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
       // Step 2: Create payment order
       final paymentAmount = 500.0; // Fixed fee for pharma appointments
       final paymentOrderResponse = await PaymentService.createPaymentOrder(
-        type: 'pharma_appointment',
-        hospitalId: _selectedHospital!.id,
-        patientName: authService.user!.name,
-        patientMobile: authService.user!.mobile,
+        appointmentId: appointmentId,
+        operationId: null,
         amount: paymentAmount,
-        metadata: {
-          'entity_id': appointmentId,
-          'entity_type': 'pharma_appointment',
-          'description': 'Pharma Appointment with ${_doctorController.text}',
-        },
+        authToken: authService.token,
       );
 
       if (paymentOrderResponse == null) {
         throw Exception('Failed to create payment order');
       }
 
-      final orderId = paymentOrderResponse['order_id'];
-      if (orderId == null) {
-        throw Exception('Failed to create payment order - no order ID returned');
-      }
-
       // Step 3: Show payment options
       setState(() {
         _showPaymentOptions = true;
+        _appointmentId = appointmentId as int?;
+        _paymentId = paymentOrderResponse['payment_id'] as int?;
+        _paymentSessionId = paymentOrderResponse['payment_session_id'] as String?;
         _isLoading = false;
       });
 
@@ -297,6 +252,53 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
       });
       Fluttertoast.showToast(
         msg: 'Error booking appointment: $e',
+        backgroundColor: AppColors.errorColor,
+      );
+    }
+  }
+
+  Future<void> _confirmPayment() async {
+    if (_paymentId == null) {
+      Fluttertoast.showToast(
+        msg: 'Payment not created. Please try again.',
+        backgroundColor: AppColors.errorColor,
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      final verified = await PaymentService.verifyPayment(
+        _paymentId!,
+        authToken: authService.token,
+      );
+
+      setState(() {
+        _isLoading = false;
+      });
+
+      if (verified) {
+        Fluttertoast.showToast(
+          msg: 'Payment verified successfully!',
+          backgroundColor: AppColors.successColor,
+        );
+        Navigator.pop(context);
+      } else {
+        Fluttertoast.showToast(
+          msg: 'Payment is still pending. Please try again later.',
+          backgroundColor: AppColors.warningColor,
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      Fluttertoast.showToast(
+        msg: 'Error verifying payment: ${e.toString()}',
         backgroundColor: AppColors.errorColor,
       );
     }
@@ -362,6 +364,9 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
                   onChanged: (hospital) {
                     setState(() {
                       _selectedHospital = hospital;
+                      _doctorController.clear();
+                      _selectedDoctorId = null;
+                      _selectedDoctor = null;
                     });
                   },
                   validator: (value) {
@@ -558,18 +563,33 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
                   ),
                 ),
                 const SizedBox(height: 20),
-
-                // Payment Methods
-                if (_selectedHospital != null) ...[
-                  _buildPaymentOption('Google Pay', 'googlepay', Icons.account_balance_wallet, Colors.blue),
-                  const SizedBox(height: 15),
-                  _buildPaymentOption('PhonePe', 'phonepe', Icons.phone_android, Colors.purple),
-                  const SizedBox(height: 15),
-                  _buildPaymentOption('Paytm', 'paytm', Icons.payment, Colors.blue),
-                  const SizedBox(height: 15),
-                  _buildPaymentOption('BHIM UPI', 'bhim', Icons.qr_code, Colors.green),
-                ],
-
+                ElevatedButton.icon(
+                  onPressed: _openCashfreeCheckout,
+                  icon: const Icon(Icons.payment),
+                  label: const Text('Open Payment Gateway'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryColor,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _confirmPayment,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.successColor,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'I Have Completed Payment',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                ),
                 const SizedBox(height: 20),
                 const Text(
                   'Note: Once payment is done and appointment is booked, there will be no refund of the booking amount.',
@@ -588,67 +608,5 @@ class _BookPharmaAppointmentScreenState extends State<BookPharmaAppointmentScree
     );
   }
 
-  Widget _buildPaymentOption(String title, String method, IconData icon, Color color) {
-    final upiId = _getUpiIdForMethod(method);
-    final hasUpiId = upiId != null && upiId.isNotEmpty;
-
-    return Card(
-      elevation: 2,
-      child: InkWell(
-        onTap: hasUpiId ? () => _openUpiApp(method, upiId) : null,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (hasUpiId)
-                      Text(
-                        upiId,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textLight,
-                        ),
-                      )
-                    else
-                      const Text(
-                        'Not configured',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.errorColor,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (hasUpiId)
-                const Icon(Icons.arrow_forward_ios, size: 16)
-              else
-                const Icon(Icons.block, color: AppColors.errorColor),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
