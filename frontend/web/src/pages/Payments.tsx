@@ -33,26 +33,26 @@ type PaymentMethod = "upi" | "card";
 
 const packages = [
   {
-    id: "starter",
-    name: "Starter",
-    installation: 1,
-    monthly: 1,
+    id: "small-clinic",
+    name: "Small Clinic",
+    installation: 5001,
+    monthly: 1111,
     features: ["Basic Appointment System", "Up to 5 Doctors", "Email Support", "Basic Analytics"],
     popular: false,
   },
   {
-    id: "professional",
-    name: "Professional",
-    installation: 5,
-    monthly: 5,
+    id: "medium",
+    name: "Medium (≤5 Drs)",
+    installation: 11000,
+    monthly: 2111,
     features: ["Advanced Booking System", "Up to 25 Doctors", "Priority Support", "Advanced Analytics", "Payment Integration"],
     popular: true,
   },
   {
-    id: "enterprise",
-    name: "Enterprise",
-    installation: 10,
-    monthly: 10,
+    id: "corporate",
+    name: "Corporate",
+    installation: 21000,
+    monthly: 5111,
     features: ["Unlimited Doctors", "24/7 Dedicated Support", "Custom Integrations", "White-label Solution", "Multi-branch Support"],
     popular: false,
   },
@@ -399,9 +399,9 @@ const Payments = () => {
               </div>
               <div className="mb-4">
                 <div className="text-2xl font-bold text-foreground">₹{pkg.installation.toLocaleString()}</div>
-                <div className="text-sm text-muted-foreground">Installation Fee</div>
+                <div className="text-sm text-muted-foreground">One-Time Software Activation & License Fee</div>
                 <div className="mt-2 text-lg font-semibold text-primary">+ ₹{pkg.monthly.toLocaleString()}/month</div>
-                <div className="text-sm text-muted-foreground">Maintenance</div>
+                <div className="text-sm text-muted-foreground">Monthly Technical Support & Maintenance Charges</div>
               </div>
               <ul className="space-y-2">
                 {pkg.features.map((feature) => (
@@ -434,13 +434,13 @@ const Payments = () => {
                   <span className="font-medium text-foreground">{hospitalData.selectedPlan.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Installation Fee:</span>
+                  <span className="text-muted-foreground">One-Time Software Activation & License Fee:</span>
                   <span className="font-medium text-foreground">
                     ₹{hospitalData.selectedPlan.installationPrice.toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Monthly Fee:</span>
+                  <span className="text-muted-foreground">Monthly Technical Support & Maintenance Charges:</span>
                   <span className="font-medium text-foreground">
                     ₹{hospitalData.selectedPlan.monthlyPrice.toLocaleString('en-IN')}/month
                   </span>
@@ -591,11 +591,11 @@ const Payments = () => {
               {paymentType !== "hospital_registration" && (
               <div className="mt-6 p-4 bg-muted rounded-xl">
                 <div className="flex justify-between mb-2">
-                  <span className="text-muted-foreground">Installation Fee</span>
+                  <span className="text-muted-foreground">One-Time Software Activation & License Fee</span>
                   <span className="font-semibold text-foreground">₹{selectedPkg?.installation.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between mb-2">
-                  <span className="text-muted-foreground">First Month Maintenance</span>
+                  <span className="text-muted-foreground">First Month Technical Support & Maintenance Charges</span>
                   <span className="font-semibold text-foreground">₹{selectedPkg?.monthly.toLocaleString()}</span>
                 </div>
                 <div className="border-t border-border pt-2 mt-2 flex justify-between">

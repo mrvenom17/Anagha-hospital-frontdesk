@@ -103,7 +103,12 @@ class _HospitalRegisterScreenState extends State<HospitalRegisterScreen> {
 
     try {
       // Create payment order for hospital registration
-      final paymentAmount = 5000.0;
+      // Default to Small Clinic pricing if no package selected
+      final paymentAmount = _selectedPackage == 'Medium (≤5 Drs)' 
+          ? 11000.0 
+          : _selectedPackage == 'Corporate' 
+              ? 21000.0 
+              : 5001.0; // Small Clinic default
       final paymentOrderResponse = await PaymentService.createHospitalRegistrationOrder(
         planName: _selectedPackage ?? 'Hospital Registration',
         amount: paymentAmount,

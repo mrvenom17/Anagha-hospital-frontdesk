@@ -18,32 +18,31 @@ class PackageSelectionScreen extends StatefulWidget {
 
 class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
   String? _selectedPackage;
-  String? _selectedBillingPeriod;
   bool _isLoading = false;
 
   final Map<String, Map<String, dynamic>> _packages = {
-    'basic': {
-      'name': 'Basic',
-      'monthly_price': 5000,
-      'yearly_price': 50000,
+    'small-clinic': {
+      'name': 'Small Clinic',
+      'installation_price': 5001,
+      'monthly_price': 1111,
       'appointments': 50,
       'operations': 5,
       'pharma_appointments': 25,
       'color': Colors.blue,
     },
-    'standard': {
-      'name': 'Standard',
-      'monthly_price': 15000,
-      'yearly_price': 150000,
+    'medium': {
+      'name': 'Medium (≤5 Drs)',
+      'installation_price': 11000,
+      'monthly_price': 2111,
       'appointments': 200,
       'operations': 20,
       'pharma_appointments': 100,
       'color': Colors.purple,
     },
-    'premium': {
-      'name': 'Premium',
-      'monthly_price': 50000,
-      'yearly_price': 500000,
+    'corporate': {
+      'name': 'Corporate',
+      'installation_price': 21000,
+      'monthly_price': 5111,
       'appointments': 1000,
       'operations': 100,
       'pharma_appointments': 500,
@@ -52,9 +51,9 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
   };
 
   Future<void> _proceedToPayment() async {
-    if (_selectedPackage == null || _selectedBillingPeriod == null) {
+    if (_selectedPackage == null) {
       Fluttertoast.showToast(
-        msg: 'Please select a package and billing period',
+        msg: 'Please select a package',
         backgroundColor: AppColors.errorColor,
       );
       return;
@@ -66,9 +65,8 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
 
     try {
       final package = _packages[_selectedPackage!]!;
-      final amount = _selectedBillingPeriod == 'monthly'
-          ? package['monthly_price'] as double
-          : package['yearly_price'] as double;
+      // For hospital registration, we charge installation fee (one-time)
+      final amount = package['installation_price'] as double;
 
       // Create payment order
       final paymentOrderResponse = await PaymentService.createHospitalRegistrationOrder(
@@ -99,7 +97,6 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
               initialPaymentId: paymentId,
               initialPaymentSessionId: paymentSessionId,
               selectedPackage: _selectedPackage!,
-              selectedBillingPeriod: _selectedBillingPeriod!,
             ),
           ),
         );
@@ -118,8 +115,8 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
   Widget _buildPackageCard(String packageKey, Map<String, dynamic> package) {
     final isSelected = _selectedPackage == packageKey;
     final color = package['color'] as Color;
+    final installationPrice = package['installation_price'] as int;
     final monthlyPrice = package['monthly_price'] as int;
-    final yearlyPrice = package['yearly_price'] as int;
 
     return Card(
       elevation: isSelected ? 6 : 2,
@@ -189,57 +186,45 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
               const SizedBox(height: 20),
               const Divider(),
               const SizedBox(height: 15),
-              if (_selectedPackage == packageKey) ...[
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildBillingOption('monthly', 'Monthly', monthlyPrice.toDouble()),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _buildBillingOption('yearly', 'Yearly', yearlyPrice.toDouble()),
-                    ),
-                  ],
-                ),
-              ] else ...[
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Monthly',
-                          style: TextStyle(fontSize: 12, color: AppColors.textLight),
+              // Show installation and monthly pricing
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'One-Time License:',
+                        style: TextStyle(fontSize: 14, color: AppColors.textLight),
+                      ),
+                      Text(
+                        '₹${installationPrice.toString()}',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
-                        Text(
-                          '₹${monthlyPrice.toString()}',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Monthly Maintenance:',
+                        style: TextStyle(fontSize: 14, color: AppColors.textLight),
+                      ),
+                      Text(
+                        '₹${monthlyPrice.toString()}/month',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
-                      ],
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const Text(
-                          'Yearly',
-                          style: TextStyle(fontSize: 12, color: AppColors.textLight),
-                        ),
-                        Text(
-                          '₹${yearlyPrice.toString()}',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -247,48 +232,6 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
     );
   }
 
-  Widget _buildBillingOption(String period, String label, double price) {
-    final isSelected = _selectedBillingPeriod == period;
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _selectedBillingPeriod = period;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primaryColor.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSelected ? AppColors.primaryColor : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: Column(
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: isSelected ? AppColors.primaryColor : AppColors.textDark,
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '₹${price.toStringAsFixed(0)}',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: isSelected ? AppColors.primaryColor : AppColors.textDark,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildFeatureRow(String label, String value) {
     return Row(
@@ -350,7 +293,7 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
-                onPressed: _isLoading || _selectedPackage == null || _selectedBillingPeriod == null
+                onPressed: _isLoading || _selectedPackage == null
                     ? null
                     : _proceedToPayment,
                 style: ElevatedButton.styleFrom(
@@ -362,8 +305,8 @@ class _PackageSelectionScreenState extends State<PackageSelectionScreen> {
                 child: _isLoading
                     ? const CircularProgressIndicator(color: Colors.white)
                     : Text(
-                        _selectedPackage == null || _selectedBillingPeriod == null
-                            ? 'Select Package & Billing Period'
+                        _selectedPackage == null
+                            ? 'Select Package'
                             : 'Proceed to Payment',
                         style: const TextStyle(
                           fontSize: 18,
