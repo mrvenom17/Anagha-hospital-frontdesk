@@ -1,7 +1,7 @@
 /**
  * Authentication utilities
  */
-import { authAPI, setAuthToken, removeAuthToken } from './api';
+import { authAPI, removeAuthToken } from './api';
 
 // Exporting as an interface is correct
 export interface User {
@@ -13,17 +13,18 @@ export interface User {
   [key: string]: any;
 }
 
-// Check if user is authenticated (Check for token existence)
+// Check if user is authenticated (Check for existence of user data)
+// Since tokens are now HttpOnly cookies, we rely on the `user` flag in localStorage temporarily
+// A robust verify call would be better for actual auth state, but we'll adapt to existing codebase design.
 export const isAuthenticated = (): boolean => {
-  return !!localStorage.getItem('authToken');
+  return !!localStorage.getItem('user');
 };
 
 // Login function
 export const login = async (mobile: string, password: string): Promise<User> => {
   try {
     const response = await authAPI.login(mobile, password);
-    // Assuming response contains { access_token: string, user: User }
-    setAuthToken(response.access_token);
+    // Token is securely handled via HttpOnly cookies, response contains { user: User }
     // Store user in localStorage for quick access
     if (response.user) {
       localStorage.setItem('user', JSON.stringify(response.user));
@@ -55,7 +56,7 @@ export const register = async (userData: {
     console.log("🔵 DEBUG: Register function called with data:", userData);
     const response = await authAPI.register(userData);
     console.log("✅ DEBUG: Registration API response:", response);
-    setAuthToken(response.access_token);
+    // Token is securely handled via HttpOnly cookies
     // Store user in localStorage for quick access
     if (response.user) {
       localStorage.setItem('user', JSON.stringify(response.user));

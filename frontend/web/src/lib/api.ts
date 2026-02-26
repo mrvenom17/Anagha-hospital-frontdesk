@@ -8,7 +8,7 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'ax
 // API Base URL - use environment variable for production API domain
 // Set VITE_API_BASE_URL in .env file: VITE_API_BASE_URL=https://api.anaghahealthconnect.com
 // Default to localhost:3000 for development
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 // Create axios instance
 const apiClient: AxiosInstance = axios.create({
@@ -17,15 +17,12 @@ const apiClient: AxiosInstance = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: 30000, // 30 seconds timeout
+  withCredentials: true, // Send cookies with cross-origin requests
 });
 
-// Request interceptor - Add auth token from localStorage
+// Request interceptor passes through normally, backend handles cookie extraction
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const token = localStorage.getItem('authToken');
-    if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
     return config;
   },
   (error: AxiosError) => {
@@ -41,44 +38,32 @@ apiClient.interceptors.response.use(
   (error: AxiosError) => {
     // Handle 401 Unauthorized - token expired or invalid
     if (error.response?.status === 401) {
-      localStorage.removeItem('authToken');
       localStorage.removeItem('user');
-      
+
       // Redirect to login if not already there
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }
     }
-    
+
     // Transform error to consistent format
     if (error.response) {
       const errorData = error.response.data as any;
       const errorMessage = errorData?.detail || errorData?.message || `HTTP error! status: ${error.response.status}`;
       return Promise.reject(new Error(errorMessage));
     }
-    
+
     // Handle network errors
     if (error.message.includes('ECONNREFUSED') || error.message.includes('Network Error')) {
       return Promise.reject(new Error('Cannot connect to server. Please ensure the backend server is running.'));
     }
-    
+
     return Promise.reject(error);
   }
 );
 
-// Helper function to get auth token from localStorage
-export const getAuthToken = (): string | null => {
-  return localStorage.getItem('authToken');
-};
-
-// Helper function to set auth token
-export const setAuthToken = (token: string): void => {
-  localStorage.setItem('authToken', token);
-};
-
-// Helper function to remove auth token
+// Helper function to remove auth session data from local storage
 export const removeAuthToken = (): void => {
-  localStorage.removeItem('authToken');
   localStorage.removeItem('user');
 };
 
@@ -87,20 +72,16 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getAuthToken();
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     ...options.headers,
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -239,13 +220,14 @@ export const appointmentsAPI = {
   }) => {
     // Guest booking doesn't require auth token, so use fetch directly
     console.log("📤 Sending guest booking request:", appointmentData);
-    
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/appointments/book-guest`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'omit', // No cookies needed for guest booking
         body: JSON.stringify(appointmentData),
         signal: AbortSignal.timeout(30000), // 30 second timeout
       });
@@ -375,6 +357,7 @@ export const paymentsAPI = {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'omit', // Not strictly necessary, but good practice
         body: JSON.stringify({
           appointment_id: orderData.appointment_id || null,
           operation_id: orderData.operation_id || null,
@@ -395,8 +378,8 @@ export const paymentsAPI = {
 
       return response.json();
     }
-    
-    // For authenticated users, use axios with token
+
+    // For authenticated users, use axios with token (which now relies on cookies thanks to apiClient config)
     const response = await apiClient.post<any>('/api/payments/create-order', {
       appointment_id: orderData.appointment_id || null,
       operation_id: orderData.operation_id || null,
@@ -408,7 +391,7 @@ export const paymentsAPI = {
 
   // Create hospital registration payment order
   createHospitalRegistrationOrder: async (
-    planName: string, 
+    planName: string,
     amount: number,
     customerName?: string,
     customerPhone?: string,

@@ -39,35 +39,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load user from localStorage and verify token on mount
+  // Load user from backend (via HttpOnly cookies) on mount
   useEffect(() => {
     const loadUser = async () => {
       try {
-        // Try to get user from localStorage first (for quick render)
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            setUser(parsedUser);
-          } catch {
-            // Invalid stored user, clear it
-            localStorage.removeItem('user');
-          }
-        }
-
-        // Verify token with backend
         const currentUser = await getCurrentUser();
         if (currentUser) {
           setUser(currentUser);
-          localStorage.setItem('user', JSON.stringify(currentUser));
         } else {
           setUser(null);
-          localStorage.removeItem('user');
         }
       } catch (error) {
         console.error('Error loading user:', error);
         setUser(null);
-        localStorage.removeItem('user');
       } finally {
         setLoading(false);
       }
@@ -79,7 +63,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const login = async (mobile: string, password: string) => {
     const loggedInUser = await authLogin(mobile, password);
     setUser(loggedInUser);
-    localStorage.setItem('user', JSON.stringify(loggedInUser));
   };
 
   const register = async (userData: {
@@ -99,13 +82,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }) => {
     const registeredUser = await authRegister(userData);
     setUser(registeredUser);
-    localStorage.setItem('user', JSON.stringify(registeredUser));
   };
 
   const logout = () => {
     authLogout();
     setUser(null);
-    localStorage.removeItem('user');
   };
 
   const refreshUser = async () => {
@@ -113,15 +94,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const currentUser = await getCurrentUser();
       if (currentUser) {
         setUser(currentUser);
-        localStorage.setItem('user', JSON.stringify(currentUser));
       } else {
         setUser(null);
-        localStorage.removeItem('user');
       }
     } catch (error) {
       console.error('Error refreshing user:', error);
       setUser(null);
-      localStorage.removeItem('user');
     }
   };
 

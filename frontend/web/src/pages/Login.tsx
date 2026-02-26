@@ -77,7 +77,7 @@ const Login = () => {
             <div className="w-12 h-12 rounded-xl bg-gradient-hero flex items-center justify-center shadow-soft">
               <Heart className="w-6 h-6 text-primary-foreground" />
             </div>
-            <span className="font-bold text-2xl text-foreground">Anagha Health</span>
+            <span className="font-bold text-2xl text-foreground">ANAGHA Health Connect™️</span>
           </Link>
 
           <h2 className="text-center text-3xl font-bold text-foreground mb-2">
@@ -193,8 +193,21 @@ const Login = () => {
             </Link>
           </div>
 
+          {/* Terms Notice */}
+          <p className="text-center mt-6 text-xs text-muted-foreground">
+            By using <strong>ANAGHA Health Connect™️</strong>, you agree to the{" "}
+            <Link to="/terms" className="text-primary hover:underline">
+              Terms & Conditions
+            </Link>
+            {" "}and{" "}
+            <Link to="/privacy" className="text-primary hover:underline">
+              Privacy Policy
+            </Link>
+            .
+          </p>
+
           {/* Back to Home */}
-          <p className="text-center mt-6">
+          <p className="text-center mt-4">
             <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
               ← Back to Home
             </Link>

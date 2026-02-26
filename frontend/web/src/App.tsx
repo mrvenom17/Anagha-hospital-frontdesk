@@ -19,6 +19,21 @@ import PatientDashboard from "./pages/PatientDashboard";
 import MyAppointments from "./pages/MyAppointments";
 import PharmaDashboard from "./pages/PharmaDashboard";
 import Payments from "./pages/Payments";
+import Careers from "./pages/Careers";
+import AboutUs from "./pages/AboutUs";
+import Blog from "./pages/Blog";
+import Press from "./pages/Press";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import TermsOfService from "./pages/TermsOfService";
+import Features from "./pages/Features";
+import PricingPage from "./pages/PricingPage";
+import Security from "./pages/Security";
+import Integrations from "./pages/Integrations";
+import HelpCenter from "./pages/HelpCenter";
+import Contact from "./pages/Contact";
+import ApiDocs from "./pages/ApiDocs";
+import Status from "./pages/Status";
+import CookiePolicy from "./pages/CookiePolicy";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -48,6 +63,21 @@ const App = () => (
           <Route path="/register-hospital" element={<RegisterHospital />} />
           <Route path="/book-appointment" element={<BookAppointment />} />
           <Route path="/pharma-appointment" element={<PharmaBookAppointment />} />
+          <Route path="/careers" element={<Careers />} />
+          <Route path="/about" element={<AboutUs />} />
+          <Route path="/blog" element={<Blog />} />
+          <Route path="/press" element={<Press />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/terms" element={<TermsOfService />} />
+          <Route path="/features" element={<Features />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/security" element={<Security />} />
+          <Route path="/integrations" element={<Integrations />} />
+          <Route path="/help" element={<HelpCenter />} />
+          <Route path="/contact" element={<Contact />} />
+          <Route path="/api-docs" element={<ApiDocs />} />
+          <Route path="/status" element={<Status />} />
+          <Route path="/cookies" element={<CookiePolicy />} />
               
               {/* Protected routes */}
               <Route

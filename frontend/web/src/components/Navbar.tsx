@@ -8,6 +8,7 @@ const Navbar = () => {
 
   const navLinks = [
     { name: "Home", href: "/" },
+    { name: "Careers", href: "/careers" },
     { name: "Login", href: "/login" },
     { name: "Register", href: "/register" },
     { name: "Register Hospital", href: "/register-hospital" },
@@ -24,7 +25,7 @@ const Navbar = () => {
               <Heart className="w-5 h-5 text-primary-foreground" />
             </div>
             <span className="font-bold text-xl text-foreground hidden sm:block">
-              Anagha Health
+              ANAGHA Health Connect™️
             </span>
           </Link>
 

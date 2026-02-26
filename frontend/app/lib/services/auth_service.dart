@@ -3,11 +3,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import '../models/user_model.dart';
 import 'dart:convert';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthService extends ChangeNotifier {
   User? _user;
   String? _token;
   bool _isLoading = false;
+  static const _storage = FlutterSecureStorage();
 
   User? get user => _user;
   String? get token => _token;
@@ -19,14 +21,34 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> _loadUser() async {
+    // Migrate to secure storage if still in shared prefs, then use secure storage
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token');
-    final userJson = prefs.getString('user_data');
+    final oldToken = prefs.getString('auth_token');
+    final oldUserJson = prefs.getString('user_data');
 
-    if (token != null && userJson != null) {
-      _token = token;
-      _user = User.fromJson(jsonDecode(userJson));
-      notifyListeners();
+    if (oldToken != null) {
+      // Migrate to secure storage
+      await ApiService.saveToken(oldToken);
+      if (oldUserJson != null) {
+        await _storage.write(key: 'user_data', value: oldUserJson);
+      }
+      // Clean up old storage
+      await prefs.remove('auth_token');
+      await prefs.remove('user_data');
+    }
+
+    // Now read from secure storage
+    _token = await ApiService.getToken();
+    final userJson = await _storage.read(key: 'user_data');
+
+    if (_token != null && userJson != null) {
+      try {
+        _user = User.fromJson(jsonDecode(userJson));
+        notifyListeners();
+      } catch (e) {
+        print("Error parsing user data: $e");
+        logout();
+      }
     }
   }
 
@@ -45,10 +67,9 @@ class AuthService extends ChangeNotifier {
         _token = data['access_token'];
         _user = User.fromJson(data['user']);
 
-        // Save to local storage
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth_token', _token!);
-        await prefs.setString('user_data', jsonEncode(_user!.toJson()));
+        // Save to secure storage
+        await ApiService.saveToken(_token!);
+        await _storage.write(key: 'user_data', value: jsonEncode(_user!.toJson()));
 
         _isLoading = false;
         notifyListeners();
@@ -70,13 +91,10 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Use different endpoint for doctor registration
       final role = userData['role']?.toString().toLowerCase();
       final endpoint = (role == 'doctor') 
           ? '/api/users/register-doctor' 
           : '/api/users/register';
-      
-      print('Registration: Using endpoint $endpoint for role $role');
       
       final response = await ApiService.post(endpoint, userData);
 
@@ -85,13 +103,9 @@ class AuthService extends ChangeNotifier {
           final data = jsonDecode(response.body);
           _token = data['access_token'];
           
-          // For doctor registration, the response structure may differ
-          // Try to get user data from response
           if (data['user'] != null) {
             _user = User.fromJson(data['user']);
           } else if (data['doctor'] != null) {
-            // Doctor registration might return 'doctor' field
-            // Convert doctor data to user format
             final doctorData = data['doctor'];
             _user = User.fromJson({
               'id': doctorData['id'] ?? doctorData['user_id'],
@@ -104,37 +118,30 @@ class AuthService extends ChangeNotifier {
             });
           }
 
-          // Save to local storage
+          // Save to secure storage
           if (_token != null && _user != null) {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('auth_token', _token!);
-            await prefs.setString('user_data', jsonEncode(_user!.toJson()));
+            await ApiService.saveToken(_token!);
+            await _storage.write(key: 'user_data', value: jsonEncode(_user!.toJson()));
 
             _isLoading = false;
             notifyListeners();
             return true;
           } else {
-            print('Registration: Missing token or user data in response');
             _isLoading = false;
             notifyListeners();
             return false;
           }
         } catch (parseError) {
-          print('Error parsing registration response: $parseError');
-          print('Response body: ${response.body}');
           _isLoading = false;
           notifyListeners();
           return false;
         }
       } else {
-        print('Registration failed with status: ${response.statusCode}');
-        print('Response body: ${response.body}');
         _isLoading = false;
         notifyListeners();
         return false;
       }
     } catch (e) {
-      print('Registration error: $e');
       _isLoading = false;
       notifyListeners();
       return false;
@@ -145,9 +152,8 @@ class AuthService extends ChangeNotifier {
     _user = null;
     _token = null;
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-    await prefs.remove('user_data');
+    await ApiService.removeToken();
+    await _storage.delete(key: 'user_data');
 
     notifyListeners();
   }
@@ -160,6 +166,8 @@ class AuthService extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         _user = User.fromJson(data);
+        // Update stored user data
+        await _storage.write(key: 'user_data', value: jsonEncode(_user!.toJson()));
         notifyListeners();
         return _user;
       }
@@ -169,6 +177,3 @@ class AuthService extends ChangeNotifier {
     return null;
   }
 }
-
-
-

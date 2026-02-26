@@ -1,10 +1,11 @@
 import { Heart, Mail, Phone, MapPin } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const footerLinks = {
   Product: ["Features", "Pricing", "Security", "Integrations"],
   Company: ["About Us", "Careers", "Blog", "Press"],
   Support: ["Help Center", "Contact", "API Docs", "Status"],
-  Legal: ["Privacy Policy", "Terms of Service", "HIPAA Compliance", "Cookie Policy"],
+  Legal: ["Privacy Policy", "Terms of Service", "Cookie Policy"],
 };
 
 const Footer = () => {
@@ -18,11 +19,13 @@ const Footer = () => {
               <div className="w-10 h-10 rounded-xl bg-gradient-hero flex items-center justify-center shadow-soft">
                 <Heart className="w-5 h-5 text-primary-foreground" />
               </div>
-              <span className="font-bold text-xl text-foreground">Anagha Health Connect</span>
+              <span className="font-bold text-xl text-foreground">ANAGHA Health Connect™️</span>
             </a>
             <p className="text-muted-foreground leading-relaxed max-w-sm">
-              Connecting Care, Empowering Health. 
-              Trusted by healthcare professionals across India.
+              A proprietary digital healthcare software of Anagha Pharmacare Private Limited.
+            </p>
+            <p className="text-muted-foreground text-sm italic">
+              A product of Anagha Pharmacare Private Limited
             </p>
             <div className="space-y-3">
               <a href="mailto:rahul@anaghahealthconnect.com" className="flex items-center gap-3 text-muted-foreground hover:text-foreground transition-colors">
@@ -45,16 +48,47 @@ const Footer = () => {
             <div key={category}>
               <h4 className="font-semibold text-foreground mb-4">{category}</h4>
               <ul className="space-y-3">
-                {links.map((link) => (
-                  <li key={link}>
-                    <a
-                      href="#"
-                      className="text-muted-foreground hover:text-foreground transition-colors text-sm"
-                    >
-                      {link}
-                    </a>
-                  </li>
-                ))}
+                {links.map((link) => {
+                  const routeMap: Record<string, string> = {
+                    "Features": "/features",
+                    "Pricing": "/pricing",
+                    "Security": "/security",
+                    "Integrations": "/integrations",
+                    "Help Center": "/help",
+                    "Contact": "/contact",
+                    "API Docs": "/api-docs",
+                    "Status": "/status",
+                    "Careers": "/careers",
+                    "About Us": "/about",
+                    "Blog": "/blog",
+                    "Press": "/press",
+                    "Privacy Policy": "/privacy",
+                    "Terms of Service": "/terms",
+                    "Cookie Policy": "/cookies"
+                  };
+                  const href = routeMap[link] || "#";
+                  const isRoute = routeMap[link] !== undefined;
+                  
+                  return (
+                    <li key={link}>
+                      {isRoute ? (
+                        <Link
+                          to={href}
+                          className="text-muted-foreground hover:text-foreground transition-colors text-sm"
+                        >
+                          {link}
+                        </Link>
+                      ) : (
+                        <a
+                          href={href}
+                          className="text-muted-foreground hover:text-foreground transition-colors text-sm"
+                        >
+                          {link}
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}
@@ -62,16 +96,18 @@ const Footer = () => {
 
         {/* Bottom */}
         <div className="mt-12 pt-8 border-t border-border flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-muted-foreground text-sm">
-            © 2024 Anagha Health Connect. All rights reserved.
-          </p>
+          <div className="text-muted-foreground text-sm text-center sm:text-left">
+            <p>©️ 2026 ANAGHA Health Connect™️.</p>
+            <p>A proprietary digital healthcare software of Anagha Pharmacare Private Limited.</p>
+            <p>All rights reserved.</p>
+          </div>
           <div className="flex items-center gap-6">
-            <a href="#" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
+            <Link to="/privacy" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
               Privacy
-            </a>
-            <a href="#" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
+            </Link>
+            <Link to="/terms" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
               Terms
-            </a>
+            </Link>
             <a href="#" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
               Cookies
             </a>

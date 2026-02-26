@@ -2,33 +2,33 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiService {
-  // Automatically detect Android Emulator (10.0.2.2) vs Localhost (127.0.0.1)
+  // Use FlutterSecureStorage for secure token management
+  static const _storage = FlutterSecureStorage();
+  
+  // Updated port to 8000 for the unified backend
   static String get baseUrl {
-    if (kIsWeb) return 'http://127.0.0.1:3000';
+    if (kIsWeb) return 'http://localhost:8000';
     try {
-      if (Platform.isAndroid) return 'http://10.0.2.2:3000';
+      if (Platform.isAndroid) return 'http://10.0.2.2:8000';
     } catch (e) {
       // Fallback
     }
-    return 'http://127.0.0.1:3000';
+    return 'http://localhost:8000';
   }
   
   static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token');
+    return await _storage.read(key: 'auth_token');
   }
 
   static Future<void> saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
+    await _storage.write(key: 'auth_token', value: token);
   }
 
   static Future<void> removeToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
+    await _storage.delete(key: 'auth_token');
   }
 
   static Future<Map<String, String>> getHeaders({bool requiresAuth = false}) async {
@@ -93,4 +93,3 @@ class ApiService {
     return response;
   }
 }
-
